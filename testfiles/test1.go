@@ -3,6 +3,6 @@ package main
 import "fmt"
 
 func main(){
-	cout << "Happy 19";
+	fmt.Println( "Happy 19");
 
 }
