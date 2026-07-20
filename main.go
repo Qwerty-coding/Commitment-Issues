@@ -3,34 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"bytes"
+	"path/filepath"
 )
-
-func getConflictedFiles() ([]string, error){
-	//prepare the git command
-	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
-
-	//Execute the command and capture its output
-	output, err := cmd.Output()
-	if err != nil{
-		return nil, err
-	}
-
-	//Remove extra spaces/newlines and split output into lines
-	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
-
-	var files []string
-
-	//convert each line from []byte to string
-	for _, line := range lines{
-		if len(line) > 0{
-			files = append(files, string(line))
-		}
-	}
-
-	return files, nil
-}
 
 func main(){
 	fmt.Println("========MergeSolver======")
@@ -54,6 +28,44 @@ func main(){
 
 	for _, file := range files{
 		fmt.Println("-", file)
+
+		ours, err := getOursVersion(file)
+		if err != nil {
+			fmt.Println("Error getting ours version", err)
+			continue
+		}
+
+		theirs, err := getTheirVersion(file)
+		if err != nil {
+			fmt.Println("Error getting their version", err)
+
+			continue
+		}
+
+		base := filepath.Base(file)
+
+		err = writeToFiles("ours"+base, ours)
+		if(err != nil){
+			fmt.Println("Error occured while writting the file")
+		}
+
+		err = writeToFiles("theirs"+base,theirs)
+		if(err != nil){
+			fmt.Println("Error occured while writting the file")
+		}
+		fmt.Println("files written successfulllllly")
+
+		//get the ast of the files and srcCode of the file
+		ast, srcCode := getAST(filepath.Join("testfiles", "ours"+base))
+		fmt.Println(ast.String())
+		fmt.Println(string(srcCode))
+
+		ast, srcCode = getAST(filepath.Join("testfiles", "theirs"+base))
+		fmt.Println(ast.String())
+		fmt.Println(string(srcCode))
+
+		//using Smackeer
+		runSmacker(base)
 	}
 }
 
