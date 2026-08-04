@@ -1,6 +1,15 @@
 FROM golang:latest
-WORKDIR /tree-ast-diff
+
+WORKDIR /app
+
+# Copy source code
 COPY . .
-# The Debian-based Go image has a working GCC pre-installed
-RUN go build -o mergetool .
-ENTRYPOINT ["/tree-ast-diff/mergetool"]
+
+# Enable CGO (Required for tree-sitter C bindings)
+ENV CGO_ENABLED=1
+
+# Build and explicitly output the binary to /mergetool
+RUN go build -v -o /mergetool .
+
+# Set the entrypoint to the absolute path of the binary
+ENTRYPOINT ["/mergetool"]
