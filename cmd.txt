@@ -1,4 +1,0 @@
-docker run --rm `
-  -e GEMINI_API_KEY="YOUR_NEW_API_KEY" `
-  -v ${PWD}:/tree-ast-diff `
-  mergetool resolve -b testfiles/base.rs -l testfiles/local.rs -r testfiles/remote.rs -o testfiles/resolved.rs

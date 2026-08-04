@@ -27,27 +27,18 @@ var mergeCmd = &cobra.Command{
 			fmt.Printf("Error reading local file: %v\n", err)
 			os.Exit(1)
 		}
-		remoteBytes, err := os.ReadFile(remoteFile)
+
+		// TODO: Phase 1 (Text Merge) and Phase 2 (Gumtree Mapping) go here.
+		
+		payload, err := engine.BuildASTPayload(baseFile, localFile, remoteFile)
 		if err != nil {
-			fmt.Printf("Error reading remote file: %v\n", err)
+			fmt.Printf("Error building AST payload: %v\n", err)
 			os.Exit(1)
 		}
 
-		// TODO: Phase 1 (Text Merge) and Phase 2 (Gumtree Mapping) go here.
-		// For now, we mock the isolation step to feed Phase 4 directly.
-		op := engine.ASTOperation{
-			Action:         "UPDATE",
-			EnclosingBlock: "fn main()",
-			LocalCode:      string(localBytes),
-			RemoteCode:     string(remoteBytes),
-		}
+	
 
-		payload := engine.ConflictPayload{
-			FilePath:   localFile,
-			Operations: []engine.ASTOperation{op},
-		}
-
-		// Phase 4: Gemini resolution using reduced-token YAML
+		// Phase 4: Gemini resolution using TOON conflict payload
 		resolvedCode, err := engine.ResolveConflictWithGemini(payload, string(localBytes))
 		if err != nil {
 			fmt.Printf("❌ Pipeline failure in Phase 4: %v\n", err)
