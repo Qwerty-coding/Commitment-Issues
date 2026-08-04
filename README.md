@@ -1,6 +1,6 @@
-# tree-ast-diff
+# Merge Conflicts Resolver
 
-Tree AST Diff is a prototype AST-guided conflict resolution tool for Rust source files. It combines Tree-sitter parsing, lightweight structural diffing, and Gemini-based resolution to produce a merged version of a conflicted file.
+Merge Conflicts Resolver is a prototype AST-guided conflict resolution tool for Rust source files. It combines Tree-sitter parsing, lightweight structural diffing, and Gemini-based resolution to produce a merged version of a conflicted file.
 
 The project is currently organized as a Cobra-based CLI with an internal engine package that handles parsing, payload construction, conflict resolution, and syntax validation.
 
