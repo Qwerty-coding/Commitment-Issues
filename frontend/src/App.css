@@ -1,0 +1,17 @@
+.app-layout{
+    display:flex;
+    width:100%;
+    min-height: calc(100vh - 56px);
+    margin:0
+}
+
+.page-area{
+    flex-grow: 1;
+    min-width: 0;
+    width: 100%;
+}
+
+.body{
+    padding:0;
+    margin:0
+}

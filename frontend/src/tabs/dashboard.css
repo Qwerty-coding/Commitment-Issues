@@ -1,0 +1,173 @@
+.dashboard-page {
+    min-height: calc(100vh - 77px);
+    padding: 70px 60px;
+    background: #f8f9fb;
+}
+
+
+/* -------------------------
+   WELCOME
+------------------------- */
+
+.welcome-section {
+    margin-bottom: 45px;
+}
+
+.welcome-section h1 {
+    margin: 0;
+    font-size: 46px;
+    font-weight: 700;
+    color: #101828;
+}
+
+.welcome-section p {
+    margin-top: 12px;
+    font-size: 22px;
+    color: #667085;
+}
+
+
+/* -------------------------
+   REPOSITORY CARD
+------------------------- */
+
+.repository-card {
+    width: 90%;
+    max-width: 1000px;
+
+    background: white;
+    border: 1px solid #e1e4e8;
+    border-radius: 18px;
+
+    padding: 45px;
+
+    display: flex;
+    align-items: flex-start;
+    gap: 40px;
+
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.04);
+}
+
+
+/* Folder icon */
+
+.repository-icon {
+    width: 120px;
+    height: 120px;
+
+    border-radius: 50%;
+
+    background: #f0eaff;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    flex-shrink: 0;
+}
+
+.repository-icon i {
+    font-size: 55px;
+    color: #6d3df5;
+}
+
+
+/* Repository content */
+
+.repository-content {
+    flex: 1;
+}
+
+.repository-content h2 {
+    margin: 5px 0 30px;
+
+    font-size: 36px;
+    font-weight: 700;
+
+    color: #101828;
+}
+
+
+/* -------------------------
+   BRANCHES
+------------------------- */
+
+.branch-flow {
+    display: flex;
+    align-items: center;
+    gap: 25px;
+}
+
+.branch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    padding: 12px 22px;
+
+    border-radius: 14px;
+
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.current-branch {
+    color: #6d3df5;
+    background: #f3efff;
+}
+
+.main-branch {
+    color: #1769e0;
+    background: #eef6ff;
+}
+
+.branch i {
+    font-size: 20px;
+}
+
+.branch-arrow {
+    font-size: 28px;
+    color: #7b8794;
+}
+
+
+/* -------------------------
+   DIVIDER
+------------------------- */
+
+.repository-divider {
+    height: 1px;
+    background: #e5e7eb;
+
+    margin: 40px 0 25px;
+}
+
+
+/* -------------------------
+   WORKSPACE
+------------------------- */
+
+.workspace-text {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+
+    color: #667085;
+    font-size: 20px;
+}
+
+.workspace-text i {
+    width: 50px;
+    height: 50px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 10px;
+
+    background: #f3efff;
+    color: #6d3df5;
+
+    font-size: 22px;
+}
