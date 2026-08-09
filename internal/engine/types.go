@@ -1,3 +1,4 @@
+// types defines the AST conflict payload and operation structures shared across the engine.
 package engine
 
 type ASTOperation struct {

@@ -1,3 +1,4 @@
+// ast handles parsing source files and building the AST-based conflict payload for resolution.
 package engine
 
 import (
@@ -7,27 +8,27 @@ import (
 	"sort"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/rust"
-	// "github.com/smacker/gum" // Conceptual Gumtree library
 )
 
-// ParseFile reads a file and generates a Tree-Sitter AST
+// ParseFile reads a source file and returns its parsed tree plus raw contents.
 func ParseFile(ctx context.Context, filePath string) (*sitter.Tree, []byte, error) {
-
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	language, err := GetLanguageForFile(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	parser := sitter.NewParser()
-	parser.SetLanguage(rust.GetLanguage())
+	parser.SetLanguage(language)
 
 	tree, err := parser.ParseCtx(ctx, nil, content)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// Guard: Ensure initial files do not have syntax errors
 	if tree.RootNode().HasError() {
 		return nil, nil, fmt.Errorf("syntax error detected in %s before merge", filePath)
 	}
@@ -35,17 +36,7 @@ func ParseFile(ctx context.Context, filePath string) (*sitter.Tree, []byte, erro
 	return tree, content, nil
 }
 
-// AdaptTreeSitterToGum maps a tree-sitter node to a GumTree structure
-func AdaptTreeSitterToGum(node *sitter.Node, sourceCode []byte) interface{} /* *gum.Tree */ {
-	if node == nil {
-		return nil
-	}
-	// Conceptual implementation to convert structures for GumTree
-	return nil
-}
-
-// BuildASTPayload parses base/local/remote files and builds a reduced AST payload.
-// This draft compares named top-level items such as functions, structs, impls, and enums.
+// BuildASTPayload compares the base/local/remote trees and creates a compact conflict payload.
 func BuildASTPayload(basePath, localPath, remotePath string) (ConflictPayload, error) {
 	ctx := context.Background()
 
@@ -53,43 +44,38 @@ func BuildASTPayload(basePath, localPath, remotePath string) (ConflictPayload, e
 	if err != nil {
 		return ConflictPayload{}, fmt.Errorf("parse base file: %w", err)
 	}
-
 	localTree, localSrc, err := ParseFile(ctx, localPath)
 	if err != nil {
 		return ConflictPayload{}, fmt.Errorf("parse local file: %w", err)
 	}
-
 	remoteTree, remoteSrc, err := ParseFile(ctx, remotePath)
 	if err != nil {
 		return ConflictPayload{}, fmt.Errorf("parse remote file: %w", err)
 	}
 
-	payload := ConflictPayload{
-		FilePath: localPath,
-	}
-
+	payload := ConflictPayload{FilePath: localPath}
 	baseNodes := collectTopLevelNodes(baseTree.RootNode(), baseSrc)
 	localNodes := collectTopLevelNodes(localTree.RootNode(), localSrc)
 	remoteNodes := collectTopLevelNodes(remoteTree.RootNode(), remoteSrc)
 
-	keySet := make(map[string]struct{})
+	keys := make(map[string]struct{})
 	for key := range baseNodes {
-		keySet[key] = struct{}{}
+		keys[key] = struct{}{}
 	}
 	for key := range localNodes {
-		keySet[key] = struct{}{}
+		keys[key] = struct{}{}
 	}
 	for key := range remoteNodes {
-		keySet[key] = struct{}{}
+		keys[key] = struct{}{}
 	}
 
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
 	}
-	sort.Strings(keys)
+	sort.Strings(ordered)
 
-	for _, key := range keys {
+	for _, key := range ordered {
 		baseNode := baseNodes[key]
 		localNode := localNodes[key]
 		remoteNode := remoteNodes[key]
@@ -103,35 +89,24 @@ func BuildASTPayload(basePath, localPath, remotePath string) (ConflictPayload, e
 		}
 
 		switch {
-		case localNode != nil && remoteNode != nil:
-			if localCode != remoteCode {
-				payload.Operations = append(
-					payload.Operations,
-					BuildContextualOperations(localNode, remoteNode, localSrc, remoteSrc, "UPDATE"),
-				)
-			}
+		case localNode != nil && remoteNode != nil && localCode != remoteCode:
+			payload.Operations = append(payload.Operations, BuildContextualOperations(localNode, remoteNode, localSrc, remoteSrc, "UPDATE"))
 		case localNode != nil && remoteNode == nil:
-			payload.Operations = append(
-				payload.Operations,
-				BuildContextualOperations(localNode, nil, localSrc, nil, "INSERT"),
-			)
+			payload.Operations = append(payload.Operations, BuildContextualOperations(localNode, nil, localSrc, nil, "INSERT"))
 		case localNode == nil && remoteNode != nil:
-			payload.Operations = append(
-				payload.Operations,
-				BuildContextualOperations(nil, remoteNode, nil, remoteSrc, "DELETE"),
-			)
+			payload.Operations = append(payload.Operations, BuildContextualOperations(nil, remoteNode, nil, remoteSrc, "DELETE"))
 		}
 	}
 
 	return payload, nil
 }
 
+// collectTopLevelNodes gathers named top-level declarations for comparison.
 func collectTopLevelNodes(root *sitter.Node, source []byte) map[string]*sitter.Node {
 	nodes := make(map[string]*sitter.Node)
 	if root == nil {
 		return nodes
 	}
-
 	for i := 0; i < int(root.NamedChildCount()); i++ {
 		child := root.NamedChild(i)
 		key := topLevelKey(child, source)
@@ -142,10 +117,10 @@ func collectTopLevelNodes(root *sitter.Node, source []byte) map[string]*sitter.N
 			nodes[key] = child
 		}
 	}
-
 	return nodes
 }
 
+// topLevelKey builds a stable identifier for a top-level declaration.
 func topLevelKey(node *sitter.Node, source []byte) string {
 	if node == nil {
 		return ""
@@ -160,7 +135,6 @@ func topLevelKey(node *sitter.Node, source []byte) string {
 			}
 		}
 		return "fn:anonymous"
-
 	case "struct_item", "impl_item", "class_declaration", "enum_item", "trait_item":
 		for i := 0; i < int(node.NamedChildCount()); i++ {
 			child := node.NamedChild(i)
@@ -169,10 +143,10 @@ func topLevelKey(node *sitter.Node, source []byte) string {
 			}
 		}
 	}
-
 	return node.Type()
 }
 
+// nodeContent returns the source text for a node, or empty when the node is nil.
 func nodeContent(node *sitter.Node, source []byte) string {
 	if node == nil {
 		return ""

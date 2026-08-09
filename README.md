@@ -35,22 +35,22 @@ The core logic lives in the [internal/engine](internal/engine) package:
 ## Prerequisites
 
 - Go 1.23 or newer
-- A Gemini API key exported as `GEMINI_API_KEY`
-- Network access for Gemini API calls
+- For Gemini: a Gemini API key exported as `GEMINI_API_KEY`
+- For local Qwen or Llama: Ollama installed and running locally
+- Network access for the provider you choose
 
 ## Build and run
 
-From the repository root:
+The native Tree-sitter dependencies are best built inside Docker, where the required C toolchain is already installed.
+
+From the repository root, build and run the container with:
 
 ```bash
-go build ./...
+docker build -t commitment-issues .
+docker run --rm -it commitment-issues --help
 ```
 
-Run the CLI with:
-
-```bash
-go run . <command> [flags]
-```
+If you want to run the CLI locally, use the containerized build path instead of relying on the host environment.
 
 ## Commands
 
@@ -113,9 +113,44 @@ go run . resolve \
   --output ./resolved.rs
 ```
 
+## Docker health check
+
+The container now includes a Docker `HEALTHCHECK` that runs the CLI help command every 30 seconds.
+
+The image also installs the native C toolchain needed by Tree-sitter's CGO-based bindings, so it can be built and run consistently in Docker by other users.
+
+## AI provider configuration
+
+The resolution backend is now routed through a small provider interface. By default it uses Gemini, but you can switch it with the `AI_PROVIDER` environment variable:
+
+```bash
+export AI_PROVIDER=gemini
+```
+
+For local model support, set `AI_PROVIDER=qwen` or `AI_PROVIDER=llama` and make sure Ollama is running locally. The code uses these default local models:
+
+- `qwen2.5-coder`
+- `llama3.1`
+
+If you have a different local Ollama host, set `OLLAMA_HOST` before running the command.
+
+This makes it easier to plug in another provider later without changing the core merge workflow.
+
+Why it exists:
+- it lets Docker know whether the container is still healthy,
+- it fails fast if the entrypoint is broken or the binary cannot start,
+- it gives you a simple way to monitor the service from `docker ps` or container orchestration tools.
+
+The check is defined in [Dockerfile](Dockerfile) and uses:
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/mergetool", "--help"] >/dev/null 2>&1 || exit 1
+```
+
 ## Notes
 
 - This repository is a prototype and the current implementation is intentionally lightweight.
 - The `diff` and `setup` commands are not yet fully implemented.
-- The merge pipeline is currently focused on Rust files and uses Tree-sitter’s Rust grammar.
+- The merge pipeline now uses Tree-sitter parsers selected by file extension, so it can work across multiple languages.
 - The system relies on Gemini for final conflict resolution, so the API key must be available in the environment.

@@ -1,3 +1,4 @@
+// isolate builds contextual operation payloads that describe the surrounding scope of each change.
 package engine
 
 import (
@@ -6,10 +7,9 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// FindEnclosingFunction walks up the AST to find the parent function signature.
+// FindEnclosingFunction walks up the AST to identify the enclosing function or type scope.
 func FindEnclosingFunction(node *sitter.Node, sourceCode []byte) string {
-	current := node
-	for current != nil {
+	for current := node; current != nil; current = current.Parent() {
 		switch current.Type() {
 		case "function_item", "function_declaration", "method_declaration":
 			for i := 0; i < int(current.NamedChildCount()); i++ {
@@ -27,12 +27,11 @@ func FindEnclosingFunction(node *sitter.Node, sourceCode []byte) string {
 				}
 			}
 		}
-		current = current.Parent()
 	}
 	return "Global Scope"
 }
 
-// BuildContextualOperations maps raw AST diffs into operation payloads with function context.
+// BuildContextualOperations creates a compact payload with scope information for each change.
 func BuildContextualOperations(localNode, remoteNode *sitter.Node, localSrc, remoteSrc []byte, action string) ASTOperation {
 	scope := "Global Scope"
 	localSnippet := ""
@@ -49,10 +48,5 @@ func BuildContextualOperations(localNode, remoteNode *sitter.Node, localSrc, rem
 		remoteSnippet = remoteNode.Content(remoteSrc)
 	}
 
-	return ASTOperation{
-		Action:         action,
-		EnclosingBlock: scope,
-		LocalCode:      localSnippet,
-		RemoteCode:     remoteSnippet,
-	}
+	return ASTOperation{Action: action, EnclosingBlock: scope, LocalCode: localSnippet, RemoteCode: remoteSnippet}
 }

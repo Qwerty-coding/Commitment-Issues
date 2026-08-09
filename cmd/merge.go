@@ -1,10 +1,9 @@
+// mergeCmd defines the CLI workflow for resolving conflicts from base, local, and remote files.
 package cmd
 
 import (
 	"fmt"
 	"os"
-
-	"commitment-issues/internal/engine"
 
 	"github.com/spf13/cobra"
 )
@@ -16,42 +15,17 @@ var (
 	outputFile string
 )
 
+// mergeCmd runs the shared resolution workflow for base/local/remote inputs.
 var mergeCmd = &cobra.Command{
 	Use:   "merge",
-	Short: "The primary Git merge-driver endpoint",
+	Short: "Resolve a conflict between base, local, and remote files",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("🚀 Initializing AST-Guided Merge Pipeline...")
-
-		localBytes, err := os.ReadFile(localFile)
-		if err != nil {
-			fmt.Printf("Error reading local file: %v\n", err)
+		fmt.Println("🚀 Starting merge workflow...")
+		if err := runResolutionWorkflow(baseFile, localFile, remoteFile, outputFile); err != nil {
+			fmt.Printf("Merge failed: %v\n", err)
 			os.Exit(1)
 		}
-
-		// TODO: Phase 1 (Text Merge) and Phase 2 (Gumtree Mapping) go here.
-		
-		payload, err := engine.BuildASTPayload(baseFile, localFile, remoteFile)
-		if err != nil {
-			fmt.Printf("Error building AST payload: %v\n", err)
-			os.Exit(1)
-		}
-
-	
-
-		// Phase 4: Gemini resolution using TOON conflict payload
-		resolvedCode, err := engine.ResolveConflictWithGemini(payload, string(localBytes))
-		if err != nil {
-			fmt.Printf("❌ Pipeline failure in Phase 4: %v\n", err)
-			os.Exit(1)
-		}
-
-		// Phase 5: Syntax Guard
-		if err := engine.ValidateAndWrite(resolvedCode, outputFile); err != nil {
-			fmt.Printf("🛡️ Phase 5 Guard rejected response: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("✅ Merged output successfully written to %s\n", outputFile)
+		fmt.Printf("Merged output written to %s\n", outputFile)
 	},
 }
 
@@ -61,10 +35,9 @@ func init() {
 	mergeCmd.Flags().StringVarP(&remoteFile, "remote", "r", "", "Path to remote file")
 	mergeCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Path to output file")
 
-	mergeCmd.MarkFlagRequired("base")
-	mergeCmd.MarkFlagRequired("local")
-	mergeCmd.MarkFlagRequired("remote")
-	mergeCmd.MarkFlagRequired("output")
+	for _, name := range []string{"base", "local", "remote", "output"} {
+		mergeCmd.MarkFlagRequired(name)
+	}
 
 	rootCmd.AddCommand(mergeCmd)
 }

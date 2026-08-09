@@ -1,3 +1,4 @@
+// checker contains lightweight deterministic heuristics for simple merge decisions.
 package engine
 
 import (
@@ -7,50 +8,33 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
+// CheckResult describes the outcome of a simple deterministic merge heuristic.
 type CheckResult struct {
 	Resolved   bool
 	MergedCode string
 	Reason     string
 }
 
-// EvaluateBasicChecker runs deterministic heuristics on conflicting AST nodes.
+// EvaluateBasicChecker applies a few lightweight heuristics for obvious node-level merges.
 func EvaluateBasicChecker(localNode, remoteNode *sitter.Node, localSrc, remoteSrc []byte) CheckResult {
 	if localNode == nil || remoteNode == nil {
 		return CheckResult{Resolved: false}
 	}
 
-	// 1. Check Function Reordering / Identical Content
 	if localNode.Type() == "function_item" && remoteNode.Type() == "function_item" {
-		localHash := hashContent(localNode.Content(localSrc))
-		remoteHash := hashContent(remoteNode.Content(remoteSrc))
-		if localHash == remoteHash {
-			return CheckResult{
-				Resolved:   true,
-				MergedCode: localNode.Content(localSrc),
-				Reason:     "Function reordering detected; AST contents are identical",
-			}
+		if hashContent(localNode.Content(localSrc)) == hashContent(remoteNode.Content(remoteSrc)) {
+			return CheckResult{Resolved: true, MergedCode: localNode.Content(localSrc), Reason: "Function contents are identical"}
 		}
 	}
 
-	// 2. Variable Identifier / Type Rename Check
 	if (localNode.Type() == "identifier" || localNode.Type() == "type_identifier") &&
 		(remoteNode.Type() == "identifier" || remoteNode.Type() == "type_identifier") {
-		return CheckResult{
-			Resolved:   true,
-			MergedCode: localNode.Content(localSrc),
-			Reason:     fmt.Sprintf("Auto-resolved identifier/type migration: %s", localNode.Content(localSrc)),
-		}
+		return CheckResult{Resolved: true, MergedCode: localNode.Content(localSrc), Reason: "Identifier or type node matched"}
 	}
 
-	// 3. Operator Swap Check
-	if localNode.Type() == "binary_expression" && remoteNode.Type() == "binary_expression" {
-		if localNode.NamedChildCount() == remoteNode.NamedChildCount() {
-			return CheckResult{
-				Resolved:   true,
-				MergedCode: remoteNode.Content(remoteSrc),
-				Reason:     "Operator change auto-resolved via remote fast-forward",
-			}
-		}
+	if localNode.Type() == "binary_expression" && remoteNode.Type() == "binary_expression" &&
+		localNode.NamedChildCount() == remoteNode.NamedChildCount() {
+		return CheckResult{Resolved: true, MergedCode: remoteNode.Content(remoteSrc), Reason: "Binary expression structure matched"}
 	}
 
 	return CheckResult{Resolved: false}

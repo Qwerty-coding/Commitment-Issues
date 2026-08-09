@@ -1,3 +1,4 @@
+// diffCmd defines the placeholder CLI command for inspecting AST-level differences.
 package cmd
 
 import (
@@ -6,11 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// diffCmd is a placeholder for future AST-diff inspection.
 var diffCmd = &cobra.Command{
 	Use:   "diff",
-	Short: "Structural AST diff viewer",
+	Short: "Inspect AST-level differences",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("📊 Displaying AST node diffs...")
+		fmt.Println("AST diff inspection is not implemented yet")
 	},
 }
 

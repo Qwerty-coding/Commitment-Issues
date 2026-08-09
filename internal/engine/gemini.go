@@ -1,4 +1,4 @@
-// llm contains the older direct Gemini integration helper used for conflict resolution.
+// gemini implements the Gemini-backed provider for sending conflict payloads to the AI model.
 package engine
 
 import (
@@ -12,8 +12,20 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ResolveConflictWithGemini sends the AST payload and local code context to Gemini for resolution.
-func ResolveConflictWithGemini(payload ConflictPayload, fullLocalCode string) (string, error) {
+// GeminiProvider is the current provider implementation.
+type GeminiProvider struct{}
+
+// NewGeminiProvider creates a Gemini-backed provider.
+func NewGeminiProvider() (Provider, error) {
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("GEMINI_API_KEY environment variable is not set")
+	}
+	return &GeminiProvider{}, nil
+}
+
+// Resolve sends the conflict payload to Gemini and returns the merged code.
+func (g *GeminiProvider) Resolve(payload ConflictPayload, fullLocalCode string) (string, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("GEMINI_API_KEY environment variable is not set")

@@ -1,3 +1,4 @@
+// setupCmd defines the placeholder CLI command for registering the tool as a Git merge driver.
 package cmd
 
 import (
@@ -6,12 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// setupCmd is a placeholder for future Git merge-driver registration.
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Registers driver in local Git config",
+	Short: "Register the tool as a Git merge driver",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("⚙️ Driver registered successfully in .git/config")
-		// TODO: Exec command: git config merge.commitment-issues.driver="..."
+		fmt.Println("Git merge-driver setup is not implemented yet")
 	},
 }
 

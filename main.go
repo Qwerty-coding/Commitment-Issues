@@ -1,3 +1,4 @@
+// main is the entry point that starts the Cobra-based CLI application.
 package main
 
 import "commitment-issues/cmd"
