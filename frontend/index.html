@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>astdiff.graph</title>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@4.0.0/dist/cytoscape-dagre.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #ffffff;
+      --surface:   #f9fafb;
+      --surface2:  #f3f4f6;
+      --border:    #e5e7eb;
+      --border2:   #d1d5db;
+      --text:      #111827;
+      --text-2:    #374151;
+      --text-3:    #6b7280;
+      --accent:    #2563eb;
+      --accent-bg: #eff6ff;
+
+      --red:       #ef4444; --red-bg:    #fee2e2; --red-border: #fca5a5;
+      --green:     #10b981; --green-bg:  #d1fae5; --green-border: #6ee7b7;
+      --amber:     #f59e0b; --amber-bg:  #fef3c7; --amber-border: #fcd34d;
+      --gray:      #9ca3af; --gray-bg:   #f3f4f6; --gray-border:  #d1d5db;
+
+      --font-mono: "JetBrains Mono","Fira Code","Cascadia Code",monospace;
+      --font-ui:   "Inter",system-ui,-apple-system,sans-serif;
+
+      --panel-h: 340px;
+      --header-h: 52px;
+      --filter-h: 40px;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 14px; }
+
+    /* ── Shell ── */
+    #shell {
+      display: grid;
+      grid-template-rows: var(--header-h) var(--filter-h) 1fr;
+      grid-template-columns: 280px 1fr;
+      grid-template-areas:
+        "header  header"
+        "filter  filter"
+        "sidebar main";
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    #header {
+      grid-area: header;
+      display: flex; align-items: center; gap: 16px;
+      padding: 0 20px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      z-index: 20;
+    }
+    .logo { font-family: var(--font-mono); font-size: 15px; font-weight: 700; letter-spacing: -0.03em; }
+    .logo em { font-style: normal; color: var(--accent); font-weight: 400; }
+    .header-meta { font-size: 12px; color: var(--text-3); }
+    .spacer { flex: 1; }
+
+    #file-selector {
+      border: 1px solid var(--border2); border-radius: 5px;
+      padding: 5px 10px; font-family: var(--font-mono); font-size: 12px;
+      background: var(--surface); color: var(--text); outline: none; min-width: 240px; cursor: pointer;
+    }
+    #file-selector:focus { border-color: var(--accent); }
+
+    .hdr-btn {
+      padding: 5px 12px; font-size: 12px; font-family: var(--font-ui); font-weight: 500;
+      border: 1px solid var(--border2); border-radius: 5px; background: var(--surface);
+      color: var(--text-2); cursor: pointer; transition: all .12s;
+    }
+    .hdr-btn:hover { border-color: var(--text-3); background: var(--bg); }
+
+    /* ── Filter bar ── */
+    #filter-bar {
+      grid-area: filter;
+      display: flex; align-items: center; gap: 6px; padding: 0 16px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      z-index: 15;
+    }
+    .filter-label { font-size: 11px; font-weight: 600; color: var(--text-3); letter-spacing: .04em; text-transform: uppercase; margin-right: 4px; }
+    .filter-chip {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px; border: 1px solid; font-size: 12px; font-weight: 500;
+      cursor: pointer; user-select: none; transition: opacity .15s, transform .1s;
+    }
+    .filter-chip:active { transform: scale(.96); }
+    .filter-chip.off { opacity: .35; }
+    .filter-chip.collision { background: var(--red-bg);   border-color: var(--red-border);   color: #991b1b; }
+    .filter-chip.added     { background: var(--green-bg); border-color: var(--green-border); color: #065f46; }
+    .filter-chip.updated   { background: var(--amber-bg); border-color: var(--amber-border); color: #92400e; }
+    .filter-chip.deleted   { background: var(--gray-bg);  border-color: var(--gray-border);  color: #374151; }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .filter-sep { width: 1px; height: 18px; background: var(--border2); margin: 0 6px; }
+
+    #search-box {
+      margin-left: auto; border: 1px solid var(--border2); border-radius: 5px;
+      padding: 4px 10px; font-size: 12px; font-family: var(--font-mono);
+      background: var(--bg); color: var(--text); outline: none; width: 200px;
+    }
+    #search-box:focus { border-color: var(--accent); }
+    #search-box::placeholder { color: var(--text-3); }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      grid-area: sidebar;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column;
+    }
+
+    .sidebar-hdr {
+      padding: 14px 16px 10px;
+      font-size: 11px; font-weight: 600; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: var(--surface); z-index: 2;
+    }
+
+    /* File cards in sidebar */
+    .file-card {
+      border-bottom: 1px solid var(--border); padding: 12px 16px; cursor: pointer;
+      transition: background .1s;
+    }
+    .file-card:hover { background: var(--surface2); }
+    .file-card.active { background: var(--accent-bg); border-left: 3px solid var(--accent); padding-left: 13px; }
+    .file-card-name {
+      font-family: var(--font-mono); font-size: 12px; color: var(--text); font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px;
+    }
+    .file-card-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+    .stat-pill {
+      font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 10px; border: 1px solid;
+    }
+    .stat-pill.collision { background: var(--red-bg);   border-color: var(--red-border);   color: #991b1b; }
+    .stat-pill.added     { background: var(--green-bg); border-color: var(--green-border); color: #065f46; }
+    .stat-pill.updated   { background: var(--amber-bg); border-color: var(--amber-border); color: #92400e; }
+    .stat-pill.deleted   { background: var(--gray-bg);  border-color: var(--gray-border);  color: #374151; }
+
+    /* Node list in sidebar (below files) */
+    .node-list-hdr {
+      padding: 10px 16px 6px;
+      font-size: 11px; font-weight: 600; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: .04em;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .node-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px; cursor: pointer; transition: background .1s; border-bottom: 1px solid var(--border);
+    }
+    .node-row:hover { background: var(--surface2); }
+    .node-row.active { background: var(--accent-bg); }
+    .node-row-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .node-row-dot.collision { background: var(--red); }
+    .node-row-dot.added     { background: var(--green); }
+    .node-row-dot.updated   { background: var(--amber); }
+    .node-row-dot.deleted   { background: var(--gray); }
+    .node-row-label { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .node-row-line { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); }
+
+    /* ── Main area ── */
+    #main {
+      grid-area: main;
+      display: flex; flex-direction: column;
+      position: relative; overflow: hidden;
+    }
+
+    /* Graph canvas */
+    #cy-wrap {
+      flex: 1; position: relative; overflow: hidden;
+      transition: height .3s ease;
+    }
+    #cy { width: 100%; height: 100%; }
+
+    /* Zoom controls */
+    #zoom-controls {
+      position: absolute; bottom: 16px; right: 16px;
+      display: flex; flex-direction: column; gap: 4px; z-index: 10;
+    }
+    .zoom-btn {
+      width: 32px; height: 32px; background: var(--bg); border: 1px solid var(--border2);
+      border-radius: 5px; color: var(--text-3); font-size: 16px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: all .12s;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    .zoom-btn:hover { border-color: var(--text); color: var(--text); }
+
+    /* Mini-map hint */
+    #graph-hint {
+      position: absolute; bottom: 16px; left: 16px;
+      font-size: 11px; color: var(--text-3); font-family: var(--font-mono);
+      background: rgba(255,255,255,.85); padding: 4px 8px; border-radius: 4px;
+      border: 1px solid var(--border); pointer-events: none;
+    }
+
+    /* ── Detail panel (slides up) ── */
+    #detail-panel {
+      height: 0;
+      border-top: none;
+      overflow: hidden;
+      transition: height .28s ease, border-top .28s;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      position: relative;
+      z-index: 10;
+    }
+    #detail-panel.open {
+      height: var(--panel-h);
+      border-top: 1px solid var(--border);
+    }
+
+    #panel-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; border-bottom: 1px solid var(--border);
+      background: var(--surface); flex-shrink: 0;
+    }
+    #panel-title { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+    #panel-badge { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
+    #panel-badge.collision { background: var(--red-bg);   border-color: var(--red-border);   color: #991b1b; }
+    #panel-badge.added     { background: var(--green-bg); border-color: var(--green-border); color: #065f46; }
+    #panel-badge.updated   { background: var(--amber-bg); border-color: var(--amber-border); color: #92400e; }
+    #panel-badge.deleted   { background: var(--gray-bg);  border-color: var(--gray-border);  color: #374151; }
+    #panel-nav { display: flex; gap: 4px; }
+    .nav-btn {
+      width: 26px; height: 26px; border: 1px solid var(--border2); border-radius: 4px;
+      background: var(--surface); color: var(--text-3); font-size: 13px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .1s;
+    }
+    .nav-btn:hover { border-color: var(--text-3); color: var(--text); }
+    .nav-btn:disabled { opacity: .3; cursor: not-allowed; }
+    #panel-close {
+      width: 26px; height: 26px; border: none; background: none; cursor: pointer;
+      color: var(--text-3); font-size: 18px; display: flex; align-items: center; justify-content: center;
+      border-radius: 4px; transition: background .1s;
+    }
+    #panel-close:hover { background: var(--surface2); color: var(--text); }
+
+    /* Code tabs */
+    #panel-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .tab-btn {
+      padding: 7px 16px; font-size: 12px; font-weight: 500; cursor: pointer;
+      border: none; background: none; color: var(--text-3); border-bottom: 2px solid transparent;
+      margin-bottom: -1px; transition: all .1s; font-family: var(--font-ui);
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* Code view */
+    #panel-body { flex: 1; overflow: hidden; display: flex; }
+
+    .code-pane {
+      display: none; flex: 1; overflow: auto;
+      font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
+    }
+    .code-pane.active { display: flex; flex-direction: column; }
+
+    /* Diff view — side by side */
+    #diff-view { display: none; flex: 1; overflow: hidden; }
+    #diff-view.active { display: flex; }
+    .diff-col {
+      flex: 1; overflow: auto; border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+    }
+    .diff-col:last-child { border-right: none; }
+    .diff-col-header {
+      padding: 5px 12px; font-size: 11px; font-weight: 600; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: var(--surface); z-index: 1; flex-shrink: 0;
+    }
+    .diff-col-header.base   { background: var(--gray-bg); }
+    .diff-col-header.ours   { background: var(--green-bg); color: #065f46; }
+    .diff-col-header.theirs { background: var(--red-bg);   color: #991b1b; }
+
+    .code-lines { padding: 10px 0; flex: 1; }
+    .code-line {
+      display: flex; min-height: 20px;
+      font-size: 12px; line-height: 1.65;
+    }
+    .code-line.added-line   { background: #dcfce7; }
+    .code-line.removed-line { background: #fee2e2; }
+    .line-num {
+      min-width: 36px; padding: 0 8px; color: var(--text-3); user-select: none;
+      text-align: right; font-size: 11px; border-right: 1px solid var(--border);
+      flex-shrink: 0; line-height: 1.65;
+    }
+    .line-text { padding: 0 12px; white-space: pre; color: var(--text); }
+
+    /* Copy btn */
+    .copy-btn {
+      position: absolute; bottom: 10px; right: 10px;
+      padding: 5px 12px; font-size: 12px; font-family: var(--font-ui); font-weight: 500;
+      border: 1px solid var(--border2); border-radius: 5px; background: var(--bg);
+      color: var(--text-2); cursor: pointer; transition: all .12s; z-index: 5;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .copy-btn.copied { background: var(--green-bg); border-color: var(--green-border); color: #065f46; }
+
+    /* ── Overlay ── */
+    #overlay {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+      background: rgba(255,255,255,.96); z-index: 100; transition: opacity .25s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+    #overlay .spinner {
+      width: 30px; height: 30px;
+      border: 2.5px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #overlay .msg { font-size: 13px; color: var(--text-3); font-family: var(--font-mono); text-align: center; white-space: pre-line; line-height: 1.6; }
+    #overlay.error .spinner { display: none; }
+    #overlay.error .msg { color: var(--red); }
+
+    /* ── Keyboard hint strip ── */
+    #kbd-strip {
+      position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; pointer-events: none; z-index: 10;
+      opacity: .55;
+    }
+    .kbd-hint { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
+    .kbd { display: inline-block; padding: 1px 5px; border: 1px solid var(--border2); border-radius: 3px; font-family: var(--font-mono); font-size: 10px; background: var(--surface); }
+
+    /* ── Empty state ── */
+    #empty-state {
+      display: none; position: absolute; inset: 0;
+      flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    }
+    #empty-state.show { display: flex; }
+    .empty-icon { font-size: 36px; }
+    .empty-title { font-size: 15px; font-weight: 600; color: var(--text-2); }
+    .empty-sub { font-size: 13px; color: var(--text-3); }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- ── Header ── -->
+  <header id="header">
+    <div class="logo">ast<em>diff</em>.graph</div>
+    <div class="header-meta" id="header-meta"></div>
+    <div class="spacer"></div>
+    <select id="file-selector" onchange="selectFileById(this.value)">
+      <option value="">Select file…</option>
+    </select>
+    <button class="hdr-btn" onclick="fetchDataFromServer()">↺ Refresh</button>
+  </header>
+
+  <!-- ── Filter bar ── -->
+  <div id="filter-bar">
+    <span class="filter-label">Show</span>
+    <div class="filter-chip collision" data-status="collision" onclick="toggleFilter(this)">
+      <span class="chip-dot"></span> Collisions
+    </div>
+    <div class="filter-chip added" data-status="added" onclick="toggleFilter(this)">
+      <span class="chip-dot"></span> Added
+    </div>
+    <div class="filter-chip updated" data-status="updated" onclick="toggleFilter(this)">
+      <span class="chip-dot"></span> Updated
+    </div>
+    <div class="filter-chip deleted" data-status="deleted" onclick="toggleFilter(this)">
+      <span class="chip-dot"></span> Deleted
+    </div>
+    <div class="filter-sep"></div>
+    <input id="search-box" type="text" placeholder="Search functions / variables…" oninput="applySearch(this.value)" />
+  </div>
+
+  <!-- ── Sidebar ── -->
+  <aside id="sidebar">
+    <div class="sidebar-hdr">Files</div>
+    <div id="file-list"></div>
+    <div class="node-list-hdr">
+      <span>Nodes</span>
+      <span id="node-count" style="font-weight:400;font-size:11px;"></span>
+    </div>
+    <div id="node-list"></div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <div id="main">
+
+    <div id="cy-wrap">
+      <div id="cy"></div>
+
+      <!-- Empty state -->
+      <div id="empty-state">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-title">No nodes match</div>
+        <div class="empty-sub">Adjust your filters or search query</div>
+      </div>
+
+      <div id="zoom-controls">
+        <button class="zoom-btn" id="zoom-in"  title="Zoom in [+]">+</button>
+        <button class="zoom-btn" id="zoom-fit" title="Fit screen [F]">⊡</button>
+        <button class="zoom-btn" id="zoom-out" title="Zoom out [−]">−</button>
+      </div>
+
+      <div id="graph-hint">Click a node to inspect · Scroll to zoom · Drag to pan</div>
+
+      <div id="kbd-strip">
+        <span class="kbd-hint"><span class="kbd">←</span><span class="kbd">→</span> Navigate</span>
+        <span class="kbd-hint"><span class="kbd">Esc</span> Close</span>
+        <span class="kbd-hint"><span class="kbd">F</span> Fit</span>
+      </div>
+    </div>
+
+    <!-- ── Detail panel ── -->
+    <div id="detail-panel">
+      <div id="panel-header">
+        <span id="panel-title">—</span>
+        <span id="panel-badge" class="panel-badge">—</span>
+        <div id="panel-nav">
+          <button class="nav-btn" id="nav-prev" title="Previous node [←]">‹</button>
+          <button class="nav-btn" id="nav-next" title="Next node [→]">›</button>
+        </div>
+        <button id="panel-close" title="Close [Esc]" onclick="closePanel()">×</button>
+      </div>
+
+      <div id="panel-tabs">
+        <button class="tab-btn active" onclick="switchTab('diff')">Diff View</button>
+        <button class="tab-btn" onclick="switchTab('base')">Base</button>
+        <button class="tab-btn" onclick="switchTab('ours')">Ours</button>
+        <button class="tab-btn" onclick="switchTab('theirs')">Theirs</button>
+      </div>
+
+      <div id="panel-body" style="position:relative;">
+
+        <!-- Diff: 3 columns -->
+        <div id="diff-view" class="active">
+          <div class="diff-col">
+            <div class="diff-col-header base">Base</div>
+            <div class="code-lines" id="diff-base"></div>
+          </div>
+          <div class="diff-col">
+            <div class="diff-col-header ours">Ours</div>
+            <div class="code-lines" id="diff-ours"></div>
+          </div>
+          <div class="diff-col">
+            <div class="diff-col-header theirs">Theirs</div>
+            <div class="code-lines" id="diff-theirs"></div>
+          </div>
+        </div>
+
+        <!-- Single panes -->
+        <div id="pane-base"   class="code-pane"><div class="code-lines" id="code-base"></div></div>
+        <div id="pane-ours"   class="code-pane"><div class="code-lines" id="code-ours"></div></div>
+        <div id="pane-theirs" class="code-pane"><div class="code-lines" id="code-theirs"></div></div>
+
+        <button class="copy-btn" id="copy-btn" onclick="copyActiveCode()">Copy</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Overlay -->
+<div id="overlay">
+  <div class="spinner"></div>
+  <div class="msg" id="overlay-msg">Connecting to /api/graph…</div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+let cy = null;
+let allNodes      = [];   // raw {data:{...}} from server
+let currentFileId = null;
+let visibleNodeIds = [];  // ordered list of leaf node ids currently shown
+let selectedIdx    = -1;  // index into visibleNodeIds
+let activeFilters  = new Set(['collision','added','updated','deleted']);
+let searchQuery    = '';
+let activeTab      = 'diff';
+
+// ── Cytoscape style ───────────────────────────────────────────────────────
+const CY_STYLE = [
+  {
+    selector: 'node',
+    style: {
+      'label':           'data(label)',
+      'font-family':     '"JetBrains Mono","Fira Code",monospace',
+      'font-size':       '11px',
+      'text-valign':     'center', 'text-halign': 'center',
+      'text-wrap':       'wrap',   'text-max-width': '160px',
+      'padding':         '14px',
+      'border-width':    '1.5px',
+      'width':           'label',  'height': 'label',
+      'transition-property': 'border-width, border-color, background-color',
+      'transition-duration': '0.15s',
+    }
+  },
+  // File node — ghost container
+  {
+    selector: 'node[kind="file"]',
+    style: {
+      'background-color':   '#ffffff', 'background-opacity': 0,
+      'border-color':       '#d1d5db', 'border-style': 'dashed',
+      'color':              '#9ca3af', 'font-size': '12px',
+      'font-family':        '"Inter",system-ui,sans-serif',
+      'text-valign':        'top', 'text-margin-y': -14, 'padding': '36px',
+    }
+  },
+  // Collision — red, hexagon
+  {
+    selector: 'node[status="collision"]',
+    style: {
+      'shape':            'hexagon',
+      'background-color': '#fee2e2', 'border-color': '#f87171', 'color': '#991b1b',
+    }
+  },
+  // Added — green, ellipse
+  {
+    selector: 'node[status="added"]',
+    style: {
+      'shape':            'ellipse',
+      'background-color': '#d1fae5', 'border-color': '#34d399', 'color': '#065f46',
+    }
+  },
+  // Updated — amber, round-rectangle
+  {
+    selector: 'node[status="updated"]',
+    style: {
+      'shape':            'round-rectangle',
+      'background-color': '#fef3c7', 'border-color': '#fbbf24', 'color': '#92400e',
+    }
+  },
+  // Deleted — gray, dashed rectangle, slightly transparent
+  {
+    selector: 'node[status="deleted"]',
+    style: {
+      'shape':            'round-rectangle',
+      'background-color': '#f3f4f6', 'border-color': '#d1d5db', 'border-style': 'dashed',
+      'color':            '#6b7280', 'opacity': 0.7,
+    }
+  },
+  // Selected highlight
+  {
+    selector: 'node.selected',
+    style: {
+      'border-width':   '3px',
+      'border-color':   '#2563eb',
+      'overlay-color':  '#2563eb',
+      'overlay-opacity': 0.07,
+    }
+  },
+  // Dimmed (search / filter)
+  {
+    selector: 'node.dimmed',
+    style: { 'opacity': 0.18 }
+  },
+  // Edges
+  {
+    selector: 'edge',
+    style: {
+      'width': 1.5, 'line-color': '#e5e7eb',
+      'target-arrow-shape': 'triangle', 'target-arrow-color': '#e5e7eb',
+      'curve-style': 'bezier', 'arrow-scale': 0.7,
+    }
+  },
+  {
+    selector: 'edge[status="collision"]',
+    style: { 'line-color': '#fca5a5', 'target-arrow-color': '#fca5a5' }
+  },
+  {
+    selector: 'edge[status="added"]',
+    style: { 'line-color': '#6ee7b7', 'target-arrow-color': '#6ee7b7' }
+  },
+  {
+    selector: 'edge[status="updated"]',
+    style: { 'line-color': '#fcd34d', 'target-arrow-color': '#fcd34d' }
+  },
+];
+
+// ── Fetch ─────────────────────────────────────────────────────────────────
+async function fetchDataFromServer() {
+  showOverlay('loading', 'Connecting to http://localhost:8080/api/graph…');
+  try {
+    const resp = await fetch('http://localhost:8080/api/graph');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const payload = await resp.json();
+    const data = payload.data || payload;
+    allNodes = data.nodes || (data.elements && data.elements.nodes) || [];
+    if (!allNodes.length) { showOverlay('error', 'No data.\nRun the engine against a conflicted repo first.'); return; }
+    buildSidebar();
+    const firstFile = allNodes.find(n => n.data.kind === 'file');
+    if (firstFile) selectFileById(firstFile.data.id);
+    hideOverlay();
+  } catch(e) {
+    showOverlay('error', 'Cannot reach /api/graph.\nIs the Go server running?\n\n' + e.message);
+  }
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────
+function buildSidebar() {
+  const fileNodes = allNodes.filter(n => n.data.kind === 'file');
+
+  // File selector dropdown
+  const sel = document.getElementById('file-selector');
+  sel.innerHTML = '';
+  fileNodes.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f.data.id;
+    opt.textContent = f.data.label;
+    sel.appendChild(opt);
+  });
+
+  // File cards
+  const fileList = document.getElementById('file-list');
+  fileList.innerHTML = '';
+  fileNodes.forEach(f => {
+    const children = allNodes.filter(n => n.data.parent === f.data.id);
+    const counts = countByStatus(children);
+    const card = document.createElement('div');
+    card.className = 'file-card';
+    card.dataset.fileId = f.data.id;
+    card.onclick = () => selectFileById(f.data.id);
+    card.innerHTML =
+      `<div class="file-card-name" title="${esc(f.data.label)}">${esc(f.data.label)}</div>` +
+      `<div class="file-card-stats">${renderStatPills(counts)}</div>`;
+    fileList.appendChild(card);
+  });
+
+  // Header meta
+  const totalLeaves = allNodes.filter(n => n.data.kind !== 'file').length;
+  const totalCollisions = allNodes.filter(n => n.data.status === 'collision').length;
+  document.getElementById('header-meta').textContent =
+    `${fileNodes.length} file${fileNodes.length !== 1 ? 's' : ''} · ${totalLeaves} elements · ${totalCollisions} collision${totalCollisions !== 1 ? 's' : ''}`;
+}
+
+function countByStatus(nodes) {
+  const c = { collision: 0, added: 0, updated: 0, deleted: 0 };
+  nodes.forEach(n => { if (n.data.status in c) c[n.data.status]++; });
+  return c;
+}
+
+function renderStatPills(counts) {
+  return Object.entries(counts)
+    .filter(([,v]) => v > 0)
+    .map(([k,v]) => `<span class="stat-pill ${k}">${v} ${k}</span>`)
+    .join('');
+}
+
+// ── File selection ────────────────────────────────────────────────────────
+function selectFileById(fileId) {
+  if (!fileId) return;
+  currentFileId = fileId;
+
+  // Sync dropdown
+  document.getElementById('file-selector').value = fileId;
+
+  // Highlight file card
+  document.querySelectorAll('.file-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.fileId === fileId);
+  });
+
+  renderGraph();
+}
+
+// ── Render graph ──────────────────────────────────────────────────────────
+function renderGraph() {
+  if (!currentFileId) return;
+
+  const fileNode = allNodes.find(n => n.data.id === currentFileId);
+  const children = allNodes.filter(n => n.data.parent === currentFileId);
+
+  // Apply filters + search
+  const filtered = children.filter(n => {
+    const statusOk  = activeFilters.has(n.data.status);
+    const searchOk  = !searchQuery || n.data.label.toLowerCase().includes(searchQuery);
+    return statusOk && searchOk;
+  });
+
+  // Build edges: file → child
+  const elements = [];
+  if (fileNode) elements.push(fileNode);
+  filtered.forEach(n => {
+    elements.push(n);
+    if (fileNode) {
+      elements.push({ data: { id: 'e__' + n.data.id, source: fileNode.data.id, target: n.data.id, status: n.data.status } });
+    }
+  });
+
+  // Empty state
+  document.getElementById('empty-state').classList.toggle('show', filtered.length === 0 && children.length > 0);
+
+  if (cy) { cy.destroy(); cy = null; }
+  if (elements.length === 0) { buildNodeList(filtered); return; }
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements,
+    style: CY_STYLE,
+    minZoom: 0.1, maxZoom: 3, wheelSensitivity: 0.25,
+  });
+
+  cy.layout({
+    name: 'dagre',
+    rankDir: 'LR',       // Left → Right: file on left, nodes fan out right
+    nodeSep: 28,
+    rankSep: 80,
+    padding: 48,
+    animate: true,
+    animationDuration: 300,
+  }).run();
+
+  cy.on('tap', 'node[kind!="file"]', evt => {
+    const id = evt.target.data('id');
+    const idx = visibleNodeIds.indexOf(id);
+    if (idx !== -1) selectNodeByIndex(idx);
+  });
+
+  cy.one('layoutstop', () => cy.fit(undefined, 48));
+
+  // Build ordered node list (by line)
+  buildNodeList(filtered);
+}
+
+// ── Node list (sidebar) ───────────────────────────────────────────────────
+function buildNodeList(filtered) {
+  // Sort by line
+  const sorted = [...filtered].sort((a,b) => (a.data.line||0) - (b.data.line||0));
+  visibleNodeIds = sorted.map(n => n.data.id);
+
+  const list = document.getElementById('node-list');
+  list.innerHTML = '';
+  document.getElementById('node-count').textContent = sorted.length + ' nodes';
+
+  sorted.forEach((n, idx) => {
+    const row = document.createElement('div');
+    row.className = 'node-row';
+    row.dataset.nodeId = n.data.id;
+    row.onclick = () => selectNodeByIndex(idx);
+    row.innerHTML =
+      `<span class="node-row-dot ${n.data.status}"></span>` +
+      `<span class="node-row-label" title="${esc(n.data.label)}">${esc(n.data.label)}</span>` +
+      `<span class="node-row-line">L${n.data.line||'?'}</span>`;
+    list.appendChild(row);
+  });
+}
+
+// ── Node selection ────────────────────────────────────────────────────────
+function selectNodeByIndex(idx) {
+  if (idx < 0 || idx >= visibleNodeIds.length) return;
+  selectedIdx = idx;
+  const nodeId = visibleNodeIds[idx];
+  const nodeData = allNodes.find(n => n.data.id === nodeId)?.data;
+  if (!nodeData) return;
+
+  // Highlight in graph
+  if (cy) {
+    cy.nodes().removeClass('selected dimmed');
+    const target = cy.getElementById(nodeId);
+    target.addClass('selected');
+    cy.nodes('[kind!="file"]').not(target).addClass('dimmed');
+    cy.animate({ fit: { eles: target, padding: 80 }, duration: 280, easing: 'ease-in-out-cubic' });
+  }
+
+  // Highlight in sidebar list
+  document.querySelectorAll('.node-row').forEach((r,i) => r.classList.toggle('active', i === idx));
+  document.querySelectorAll('.node-row')[idx]?.scrollIntoView({ block: 'nearest' });
+
+  // Update nav buttons
+  document.getElementById('nav-prev').disabled = idx === 0;
+  document.getElementById('nav-next').disabled = idx === visibleNodeIds.length - 1;
+
+  openPanel(nodeData);
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────
+function openPanel(data) {
+  document.getElementById('panel-title').textContent = data.label || '—';
+  const badge = document.getElementById('panel-badge');
+  badge.textContent = data.status || '—';
+  badge.className = 'panel-badge ' + (data.status || '');
+
+  // Render code panes
+  renderCodePane('code-base',   data.base_code);
+  renderCodePane('code-ours',   data.our_code);
+  renderCodePane('code-theirs', data.their_code);
+  renderDiffCols(data);
+
+  document.getElementById('detail-panel').classList.add('open');
+  switchTab(activeTab);
+}
+
+function closePanel() {
+  document.getElementById('detail-panel').classList.remove('open');
+  if (cy) { cy.nodes().removeClass('selected dimmed'); }
+  document.querySelectorAll('.node-row').forEach(r => r.classList.remove('active'));
+  selectedIdx = -1;
+}
+
+// ── Code rendering ────────────────────────────────────────────────────────
+function renderCodePane(containerId, code) {
+  const el = document.getElementById(containerId);
+  if (!code) { el.innerHTML = '<div style="padding:16px;color:var(--text-3);font-size:12px;">Not present in this version.</div>'; return; }
+  const lines = code.split('\n');
+  el.innerHTML = lines.map((line, i) =>
+    `<div class="code-line"><span class="line-num">${i+1}</span><span class="line-text">${esc(line)}</span></div>`
+  ).join('');
+}
+
+function renderDiffCols(data) {
+  const baseLines   = (data.base_code   || '').split('\n');
+  const ourLines    = (data.our_code    || '').split('\n');
+  const theirLines  = (data.their_code  || '').split('\n');
+
+  document.getElementById('diff-base').innerHTML   = renderDiffLines(baseLines, ourLines,   false);
+  document.getElementById('diff-ours').innerHTML   = renderDiffLines(ourLines,  baseLines,  true);
+  document.getElementById('diff-theirs').innerHTML = renderDiffLines(theirLines,baseLines,  true);
+}
+
+// Very lightweight line diff: mark lines not in the other set
+function renderDiffLines(lines, compareLines, isNew) {
+  if (!lines[0] && lines.length === 1) {
+    return '<div style="padding:16px;color:var(--text-3);font-size:12px;">Not present in this version.</div>';
+  }
+  const compareSet = new Set(compareLines);
+  return lines.map((line, i) => {
+    const changed = line.trim() !== '' && !compareSet.has(line);
+    const cls = changed ? (isNew ? 'added-line' : 'removed-line') : '';
+    return `<div class="code-line ${cls}"><span class="line-num">${i+1}</span><span class="line-text">${esc(line)}</span></div>`;
+  }).join('');
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    const tabs = ['diff','base','ours','theirs'];
+    b.classList.toggle('active', tabs[i] === tab);
+  });
+  document.getElementById('diff-view').classList.toggle('active', tab === 'diff');
+  ['base','ours','theirs'].forEach(t => {
+    document.getElementById('pane-' + t).classList.toggle('active', t === tab);
+  });
+}
+
+// ── Copy ──────────────────────────────────────────────────────────────────
+function copyActiveCode() {
+  const nodeData = allNodes.find(n => n.data.id === visibleNodeIds[selectedIdx])?.data;
+  if (!nodeData) return;
+  const code = activeTab === 'base' ? nodeData.base_code :
+               activeTab === 'ours' ? nodeData.our_code  :
+               activeTab === 'theirs' ? nodeData.their_code :
+               nodeData.their_code || nodeData.our_code || nodeData.base_code || '';
+  navigator.clipboard.writeText(code || '').then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+  });
+}
+
+// ── Filters ───────────────────────────────────────────────────────────────
+function toggleFilter(chip) {
+  const status = chip.dataset.status;
+  if (activeFilters.has(status)) {
+    if (activeFilters.size === 1) return; // keep at least one
+    activeFilters.delete(status);
+    chip.classList.add('off');
+  } else {
+    activeFilters.add(status);
+    chip.classList.remove('off');
+  }
+  renderGraph();
+}
+
+// ── Search ────────────────────────────────────────────────────────────────
+function applySearch(q) {
+  searchQuery = q.trim().toLowerCase();
+  renderGraph();
+}
+
+// ── Keyboard ─────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown')  selectNodeByIndex(selectedIdx + 1);
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')    selectNodeByIndex(selectedIdx - 1);
+  if (e.key === 'Escape')  closePanel();
+  if (e.key === 'f' || e.key === 'F') { if(cy) cy.fit(undefined, 48); }
+});
+
+// ── Nav buttons ───────────────────────────────────────────────────────────
+document.getElementById('nav-prev').addEventListener('click', () => selectNodeByIndex(selectedIdx - 1));
+document.getElementById('nav-next').addEventListener('click', () => selectNodeByIndex(selectedIdx + 1));
+
+// ── Zoom buttons ──────────────────────────────────────────────────────────
+document.getElementById('zoom-in').addEventListener('click',  () => { if(cy) cy.zoom({ level: cy.zoom()*1.25, renderedPosition: center() }); });
+document.getElementById('zoom-out').addEventListener('click', () => { if(cy) cy.zoom({ level: cy.zoom()*0.8,  renderedPosition: center() }); });
+document.getElementById('zoom-fit').addEventListener('click', () => { if(cy) cy.fit(undefined, 48); });
+function center() { const e=document.getElementById('cy'); return {x:e.clientWidth/2, y:e.clientHeight/2}; }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function showOverlay(type, msg) {
+  const el = document.getElementById('overlay');
+  el.className = type === 'error' ? 'error' : '';
+  document.getElementById('overlay-msg').textContent = msg;
+}
+function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+fetchDataFromServer();
+</script>
+</body>
+</html>
