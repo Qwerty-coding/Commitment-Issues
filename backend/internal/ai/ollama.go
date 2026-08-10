@@ -57,7 +57,7 @@ func (o *OllamaResolver) ResolveCollision(ctx context.Context, collision semanti
 	if err != nil {
 		return nil, err
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
 	// Notice: No API key header needed for local Ollama!
 

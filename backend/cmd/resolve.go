@@ -26,7 +26,7 @@ var resolveCmd = &cobra.Command{
 			apiKey = os.Getenv("AI_API_KEY")
 		}
 
-		targetPath := ""
+		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}
@@ -58,7 +58,7 @@ var resolveCmd = &cobra.Command{
 func init() {
 	resolveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "API Key for the AI provider")
 	resolveCmd.Flags().StringVarP(&provider, "provider", "p", "gemini", "AI Provider (gemini, ollama, groq, openai)")
-	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (e.g., llama3, qwen2.5-coder)")
+	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (e.g., qwen2:1.5b, llama3, qwen2.5-coder)")
 	resolveCmd.Flags().StringVar(&baseURL, "url", "", "Custom base URL (e.g., http://localhost:11434/v1)")
 	
 	resolveCmd.Flags().IntVarP(&threshold, "threshold", "t", 70, "Confidence threshold percentage")

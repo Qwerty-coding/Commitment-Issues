@@ -39,6 +39,21 @@ type FileOutcome struct {
 
 func ResolveScanRoot(argPath string) string {
 	if argPath != "" {
+		if filepath.IsAbs(argPath) {
+			return argPath
+		}
+		cwd, err := os.Getwd()
+		if err == nil {
+			if _, err := os.Stat(filepath.Join(cwd, argPath)); err == nil {
+				return filepath.Join(cwd, argPath)
+			}
+			if _, err := os.Stat(filepath.Join(cwd, "go.mod")); err == nil {
+				parent := filepath.Dir(cwd)
+				if _, err := os.Stat(filepath.Join(parent, argPath)); err == nil {
+					return filepath.Join(parent, argPath)
+				}
+			}
+		}
 		return argPath
 	}
 	cwd, err := os.Getwd()
@@ -58,11 +73,37 @@ func FindConflicts(scanRoot string) (map[string][]string, []string, error) {
 		return nil, nil, err
 	}
 
+	absScanRoot, err := filepath.Abs(scanRoot)
+	if err != nil {
+		absScanRoot = scanRoot
+	}
+
 	conflictsByRepo := make(map[string][]string)
 	for _, repoRoot := range repoRoots {
 		conflictedFiles, err := git.GetConflictedFiles(repoRoot)
 		if err == nil && len(conflictedFiles) > 0 {
-			conflictsByRepo[repoRoot] = conflictedFiles
+			absRepoRoot, err := filepath.Abs(repoRoot)
+			if err != nil {
+				absRepoRoot = repoRoot
+			}
+
+			// If scanRoot is a subdirectory of repoRoot, filter files
+			relScan, relErr := filepath.Rel(absRepoRoot, absScanRoot)
+			if relErr == nil && relScan != "." && !strings.HasPrefix(relScan, "..") {
+				var filtered []string
+				prefix := relScan + string(filepath.Separator)
+				for _, f := range conflictedFiles {
+					cleanF := filepath.Clean(f)
+					if cleanF == relScan || strings.HasPrefix(cleanF, prefix) {
+						filtered = append(filtered, f)
+					}
+				}
+				conflictedFiles = filtered
+			}
+
+			if len(conflictedFiles) > 0 {
+				conflictsByRepo[repoRoot] = conflictedFiles
+			}
 		}
 	}
 	return conflictsByRepo, repoRoots, nil

@@ -1,58 +1,66 @@
-import React, { useState } from 'react';
-import SemanticExplorer from './components/SemanticExplorer';
-import PromptPreview from './components/PromptPreview';
-import './App.css';
+import './App.css'
+import Navbar from './components/navbar'
+import Sidebar from "./components/sidebar"
+//tabs on sidebar
+import Dashboard from './tabs/dashboard' 
+import Conflicts from './tabs/conflicts'
+import Treediff from './tabs/treediff'
+import Suggestions from './tabs/suggestions'
+import Commitgraph from './tabs/commitgraph'
+import History from './tabs/history'
 
-export function App() {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [showPromptPanel, setShowPromptPanel] = useState(false);
+import {BrowserRouter, Routes, Route} from "react-router-dom"
+import { useState} from "react";
+
+
+
+function App() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // function to toggle sidebar
+    const toggleSidebar = () => {
+        setSidebarOpen(prev => !prev);
+    };
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <h1>🔀 MergeGraph AI</h1>
-          <span className="subtitle">Semantic Merge Conflict Analysis</span>
-        </div>
-        <div className="header-right">
-          <button
-            className="toggle-prompt-btn"
-            onClick={() => setShowPromptPanel(!showPromptPanel)}
-            title="Toggle prompt preview panel"
-          >
-            {showPromptPanel ? '✕' : '+'} Prompt
-          </button>
-        </div>
-      </header>
+    <BrowserRouter>
+    
+    <Navbar toggleSidebar={toggleSidebar}/>
 
-      <div className="app-body">
-        <div className="main-panel">
-          <SemanticExplorer onFileSelect={setSelectedFile} />
-        </div>
+    <div className="app-layout">
 
-        {showPromptPanel && (
-          <div className="prompt-panel">
-            <PromptPreview file={selectedFile} />
-          </div>
-        )}
-      </div>
+    {/* SIDEBAR */}
+    {sidebarOpen && (
+        <Sidebar />
+    )}
 
-      <footer className="app-footer">
-        <div className="footer-left">
-          Graph Server: <span className="status-online">● Online</span>
-        </div>
-        <div className="footer-right">
-          <a href="https://github.com" target="_blank" rel="noopener noreferrer">
-            GitHub
-          </a>
-          <span className="divider">•</span>
-          <a href="/docs" target="_blank" rel="noopener noreferrer">
-            Docs
-          </a>
-        </div>
-      </footer>
+    {/* PAGE AREA */}
+    <div className="page-area">
+
+        <Routes>
+
+            <Route
+                path="/"
+                element={<Dashboard />}
+            />
+
+            <Route
+                path="/suggestions"
+                element={<Suggestions />}
+            />
+
+            <Route
+                path="/conflicts"
+                element={<Conflicts />}
+            />
+
+        </Routes>
+
     </div>
-  );
+
+</div>
+</BrowserRouter>
+  )
 }
 
-export default App;
+export default App

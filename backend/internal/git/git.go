@@ -53,10 +53,32 @@ func FindGitRepositoryRoots(rootDir string) ([]string, error) {
 		}
 	}
 
+	if len(repoRoots) == 0 {
+		curr := rootDir
+		if abs, err := filepath.Abs(rootDir); err == nil {
+			curr = abs
+		}
+		for {
+			gitDir := filepath.Join(curr, ".git")
+			if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+				repoRoots = append(repoRoots, curr)
+				break
+			}
+			parent := filepath.Dir(curr)
+			if parent == curr {
+				break
+			}
+			curr = parent
+		}
+	}
+
 	return repoRoots, nil
 }
 
 func GetConflictedFiles(repoDir string) ([]string, error) {
+	var files []string
+	seen := make(map[string]bool)
+
 	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
 	cmd.Dir = repoDir
 
@@ -65,20 +87,97 @@ func GetConflictedFiles(repoDir string) ([]string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%v: %s", err, stderr.String())
+	if err := cmd.Run(); err == nil {
+		rawOutput := strings.TrimSpace(out.String())
+		rawOutput = strings.ReplaceAll(rawOutput, "\r\n", "\n")
+		if rawOutput != "" {
+			for _, f := range strings.Split(rawOutput, "\n") {
+				if f != "" {
+					files = append(files, f)
+					seen[f] = true
+				}
+			}
+		}
 	}
 
-	rawOutput := strings.TrimSpace(out.String())
-	rawOutput = strings.ReplaceAll(rawOutput, "\r\n", "\n")
+	// Scan filesystem for files containing inline conflict markers
+	_ = filepath.WalkDir(repoDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "node_modules" || name == "dist" || name == "build" || name == ".next" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
-	files := strings.Split(rawOutput, "\n")
+		rel, err := filepath.Rel(repoDir, path)
+		if err != nil || seen[rel] {
+			return nil
+		}
 
-	if len(files) == 1 && files[0] == "" {
-		return []string{}, nil
-	}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".js", ".jsx", ".ts", ".tsx", ".go", ".py", ".java", ".c", ".cpp", ".cs", ".php", ".rb", ".json", ".md", ".txt", ".html", ".css":
+			data, readErr := os.ReadFile(path)
+			if readErr == nil {
+				content := string(data)
+				if strings.Contains(content, "<<<<<<<") && strings.Contains(content, ">>>>>>>") {
+					files = append(files, rel)
+					seen[rel] = true
+				}
+			}
+		}
+		return nil
+	})
 
 	return files, nil
+}
+
+func ParseInlineConflict(content string) (base, ours, theirs string) {
+	lines := strings.Split(content, "\n")
+	var ourLines []string
+	var theirLines []string
+	var baseLines []string
+
+	state := 0 // 0: Normal, 1: Ours, 2: Base (diff3), 3: Theirs
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<<<<<<<") {
+			state = 1
+			continue
+		}
+		if strings.HasPrefix(trimmed, "|||||||") {
+			state = 2
+			continue
+		}
+		if strings.HasPrefix(trimmed, "=======") && state != 0 {
+			state = 3
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">>>>>>>") && state != 0 {
+			state = 0
+			continue
+		}
+
+		switch state {
+		case 0:
+			ourLines = append(ourLines, line)
+			theirLines = append(theirLines, line)
+			baseLines = append(baseLines, line)
+		case 1:
+			ourLines = append(ourLines, line)
+		case 2:
+			baseLines = append(baseLines, line)
+		case 3:
+			theirLines = append(theirLines, line)
+		}
+	}
+
+	return strings.Join(baseLines, "\n"), strings.Join(ourLines, "\n"), strings.Join(theirLines, "\n")
 }
 
 func ExtractConflictVersions(repoDir, filename string) (ConflictData, error) {
@@ -104,19 +203,24 @@ func ExtractConflictVersions(repoDir, filename string) (ConflictData, error) {
 	var err error
 
 	data.BaseVersion, err = getStage(1)
-	if err != nil {
-		return data, fmt.Errorf("failed to get Base (Stage 1): %v", err)
+	if err == nil {
+		data.OurVersion, _ = getStage(2)
+		data.TheirVersion, _ = getStage(3)
+		return data, nil
 	}
 
-	data.OurVersion, err = getStage(2)
-	if err != nil {
-		return data, fmt.Errorf("failed to get Ours (Stage 2): %v", err)
+	// Fallback to reading file on disk and parsing inline conflict markers
+	filePath := filepath.Join(repoDir, cleanFilename)
+	contentBytes, readErr := os.ReadFile(filePath)
+	if readErr != nil {
+		return data, fmt.Errorf("failed to get Base (Stage 1): %v and failed to read file on disk: %v", err, readErr)
 	}
 
-	data.TheirVersion, err = getStage(3)
-	if err != nil {
-		return data, fmt.Errorf("failed to get Theirs (Stage 3): %v", err)
+	content := string(contentBytes)
+	if strings.Contains(content, "<<<<<<<") && strings.Contains(content, ">>>>>>>") {
+		data.BaseVersion, data.OurVersion, data.TheirVersion = ParseInlineConflict(content)
+		return data, nil
 	}
 
-	return data, nil
+	return data, fmt.Errorf("failed to extract conflict versions for %s: %v", cleanFilename, err)
 }

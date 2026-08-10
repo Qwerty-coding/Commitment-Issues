@@ -1,0 +1,136 @@
+{
+  "file_name": "conflicts/sampleConflict.js",
+  "base_code": "// Base configuration\nconst APP_VERSION = \"2.1.0\";\n\n",
+  "our_code": "// Base configuration\nconst APP_VERSION = \"2.1.0\";\n\n// OURS: Non-colliding additions (Safe to apply directly)\nconst ENABLE_CACHE = true;\n\nfunction calculateCacheTTL() {\n    return 3600;\n}\n\n// OURS: Colliding variable update (Requires AI resolution)\nconst API_ENDPOINT = \"https://api.v2.service.com\";\n\n// OURS: Colliding function modification (Requires AI resolution)\nfunction authenticateUser(user) {\n    console.log(\"Authenticating via OAuth2 token...\");\n    return user.token != null;\n}\n",
+  "their_code": "// Base configuration\nconst APP_VERSION = \"2.1.0\";\n\n// THEIRS: Non-colliding additions (Safe to apply directly)\nconst ENABLE_LOGGING = true;\n\nfunction getLogLevel() {\n    return \"DEBUG\";\n}\n\n// THEIRS: Colliding variable update (Requires AI resolution)\nconst API_ENDPOINT = \"https://graphql.service.com\";\n\n// THEIRS: Colliding function modification (Requires AI resolution)\nfunction authenticateUser(user) {\n    console.log(\"Authenticating via JWT bearer...\");\n    return user.jwt != null;\n}\n",
+  "our_ast_data": {
+    "functions": [
+      {
+        "name": "calculateCacheTTL",
+        "kind": "Function",
+        "line": 7,
+        "content": "function calculateCacheTTL() {\n    return 3600;\n}"
+      },
+      {
+        "name": "authenticateUser",
+        "kind": "Function",
+        "line": 15,
+        "content": "function authenticateUser(user) {\n    console.log(\"Authenticating via OAuth2 token...\");\n    return user.token != null;\n}",
+        "calls": [
+          "console.log"
+        ]
+      }
+    ],
+    "variables": [
+      {
+        "name": "APP_VERSION",
+        "kind": "Variable",
+        "line": 2,
+        "content": "\"2.1.0\""
+      },
+      {
+        "name": "ENABLE_CACHE",
+        "kind": "Variable",
+        "line": 5,
+        "content": "true"
+      },
+      {
+        "name": "API_ENDPOINT",
+        "kind": "Variable",
+        "line": 12,
+        "content": "\"https://api.v2.service.com\""
+      }
+    ]
+  },
+  "their_ast_data": {
+    "functions": [
+      {
+        "name": "getLogLevel",
+        "kind": "Function",
+        "line": 7,
+        "content": "function getLogLevel() {\n    return \"DEBUG\";\n}"
+      },
+      {
+        "name": "authenticateUser",
+        "kind": "Function",
+        "line": 15,
+        "content": "function authenticateUser(user) {\n    console.log(\"Authenticating via JWT bearer...\");\n    return user.jwt != null;\n}",
+        "calls": [
+          "console.log"
+        ]
+      }
+    ],
+    "variables": [
+      {
+        "name": "APP_VERSION",
+        "kind": "Variable",
+        "line": 2,
+        "content": "\"2.1.0\""
+      },
+      {
+        "name": "ENABLE_LOGGING",
+        "kind": "Variable",
+        "line": 5,
+        "content": "true"
+      },
+      {
+        "name": "API_ENDPOINT",
+        "kind": "Variable",
+        "line": 12,
+        "content": "\"https://graphql.service.com\""
+      }
+    ]
+  },
+  "smart_diff": {
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Variable",
+        "name": "API_ENDPOINT",
+        "line": 12,
+        "our_content": "\"https://api.v2.service.com\"",
+        "their_content": "\"https://graphql.service.com\""
+      },
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "authenticateUser",
+        "line": 15,
+        "our_content": "function authenticateUser(user) {\n    console.log(\"Authenticating via OAuth2 token...\");\n    return user.token != null;\n}",
+        "their_content": "function authenticateUser(user) {\n    console.log(\"Authenticating via JWT bearer...\");\n    return user.jwt != null;\n}"
+      }
+    ],
+    "our_changes": [
+      {
+        "type": "ADDED",
+        "kind": "Variable",
+        "name": "ENABLE_CACHE",
+        "line": 5,
+        "our_content": "true"
+      },
+      {
+        "type": "ADDED",
+        "kind": "Function",
+        "name": "calculateCacheTTL",
+        "line": 7,
+        "our_content": "function calculateCacheTTL() {\n    return 3600;\n}"
+      }
+    ],
+    "their_changes": [
+      {
+        "type": "ADDED",
+        "kind": "Variable",
+        "name": "ENABLE_LOGGING",
+        "line": 5,
+        "their_content": "true"
+      },
+      {
+        "type": "ADDED",
+        "kind": "Function",
+        "name": "getLogLevel",
+        "line": 7,
+        "their_content": "function getLogLevel() {\n    return \"DEBUG\";\n}"
+      }
+    ]
+  }
+}

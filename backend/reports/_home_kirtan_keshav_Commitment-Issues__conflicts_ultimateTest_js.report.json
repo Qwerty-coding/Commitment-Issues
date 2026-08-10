@@ -1,0 +1,149 @@
+{
+  "file_name": "conflicts/ultimateTest.js",
+  "base_code": "const APP_VERSION = \"1.0.0\";\n\nfunction fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}\n",
+  "our_code": "const APP_VERSION = \"1.0.0\";\nlet maxUsers = 500; // OURS updated this value\nlet timeout = 5000;\nconst oldFeature = \"deprecated\";00\n\nfunction fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}\n\nfunction processData() { // OURS added this function\n    return 1;\n}",
+  "their_code": "const APP_VERSION = \"1.0.0\";\nlet maxUsers = 100;\nlet timeout = 10000; // THEIRS updated this value\n\nfunction fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}\n\n// THEIRS updated this function body\nfunction fetchData() {\n    console.log(\"Fetching via REST API...\");\n}\n\nconst newFeature = \"active\";",
+  "our_ast_data": {
+    "functions": [
+      {
+        "name": "fetchData",
+        "kind": "Function",
+        "line": 6,
+        "content": "function fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}",
+        "calls": [
+          "console.log"
+        ]
+      },
+      {
+        "name": "processData",
+        "kind": "Function",
+        "line": 10,
+        "content": "function processData() { // OURS added this function\n    return 1;\n}"
+      }
+    ],
+    "variables": [
+      {
+        "name": "APP_VERSION",
+        "kind": "Variable",
+        "line": 1,
+        "content": "\"1.0.0\""
+      },
+      {
+        "name": "maxUsers",
+        "kind": "Variable",
+        "line": 2,
+        "content": "500"
+      },
+      {
+        "name": "timeout",
+        "kind": "Variable",
+        "line": 3,
+        "content": "5000"
+      },
+      {
+        "name": "oldFeature",
+        "kind": "Variable",
+        "line": 4,
+        "content": "\"deprecated\""
+      }
+    ]
+  },
+  "their_ast_data": {
+    "functions": [
+      {
+        "name": "fetchData",
+        "kind": "Function",
+        "line": 5,
+        "content": "function fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}",
+        "calls": [
+          "console.log"
+        ]
+      },
+      {
+        "name": "fetchData",
+        "kind": "Function",
+        "line": 10,
+        "content": "function fetchData() {\n    console.log(\"Fetching via REST API...\");\n}"
+      }
+    ],
+    "variables": [
+      {
+        "name": "APP_VERSION",
+        "kind": "Variable",
+        "line": 1,
+        "content": "\"1.0.0\""
+      },
+      {
+        "name": "maxUsers",
+        "kind": "Variable",
+        "line": 2,
+        "content": "100"
+      },
+      {
+        "name": "timeout",
+        "kind": "Variable",
+        "line": 3,
+        "content": "10000"
+      },
+      {
+        "name": "newFeature",
+        "kind": "Variable",
+        "line": 14,
+        "content": "\"active\""
+      }
+    ]
+  },
+  "smart_diff": {
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Variable",
+        "name": "maxUsers",
+        "line": 2,
+        "our_content": "500",
+        "their_content": "100"
+      },
+      {
+        "type": "COLLISION",
+        "kind": "Variable",
+        "name": "timeout",
+        "line": 3,
+        "our_content": "5000",
+        "their_content": "10000"
+      }
+    ],
+    "our_changes": [
+      {
+        "type": "ADDED",
+        "kind": "Variable",
+        "name": "oldFeature",
+        "line": 4,
+        "our_content": "\"deprecated\""
+      },
+      {
+        "type": "ADDED",
+        "kind": "Function",
+        "name": "processData",
+        "line": 10,
+        "our_content": "function processData() { // OURS added this function\n    return 1;\n}"
+      }
+    ],
+    "their_changes": [
+      {
+        "type": "ADDED",
+        "kind": "Variable",
+        "name": "newFeature",
+        "line": 14,
+        "their_content": "\"active\""
+      },
+      {
+        "type": "UPDATED",
+        "kind": "Function",
+        "name": "fetchData",
+        "line": 10,
+        "base_content": "function fetchData() {\n    console.log(\"Fetching via GraphQL...\");\n}",
+        "their_content": "function fetchData() {\n    console.log(\"Fetching via REST API...\");\n}"
+      }
+    ]
+  }
+}

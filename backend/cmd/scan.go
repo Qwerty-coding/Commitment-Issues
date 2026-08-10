@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"CommitIssues/internal/engine"
+
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +12,7 @@ var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Scan directory for Git merge conflicts",
 	Run: func(cmd *cobra.Command, args []string) {
-		targetPath := ""
+		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

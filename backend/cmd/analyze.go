@@ -11,7 +11,7 @@ var analyzeCmd = &cobra.Command{
 	Use:   "analyze [path]",
 	Short: "Analyze conflicts, generate AST diffs and JSON reports",
 	Run: func(cmd *cobra.Command, args []string) {
-		targetPath := ""
+		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}
