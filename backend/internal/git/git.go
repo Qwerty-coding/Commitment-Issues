@@ -136,6 +136,28 @@ func GetConflictedFiles(repoDir string) ([]string, error) {
 	return files, nil
 }
 
+func CurrentBranch(repoDir string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = repoDir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func IncomingBranch(repoDir string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "MERGE_HEAD")
+	cmd.Dir = repoDir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(out.String())
+}
+
 func ParseInlineConflict(content string) (base, ours, theirs string) {
 	lines := strings.Split(content, "\n")
 	var ourLines []string

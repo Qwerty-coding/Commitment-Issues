@@ -35,8 +35,7 @@ func PrintASTContext(w io.Writer, label string, data parser.ASTContext) {
 }
 
 func PrintPayloadJSON(w io.Writer, payload prompt.AIRequestPayload, jsonBytes []byte) {
-	fmt.Fprintln(w, "\n--- AI REQUEST PAYLOAD (JSON) ---")
-	fmt.Fprintln(w, string(jsonBytes))
+	fmt.Fprintln(w, "\n--- AI REQUEST PAYLOAD (TOON) ---")
 }
 
 func SaveReportFile(jsonBytes []byte, repoRoot, fileName string) (string, error) {

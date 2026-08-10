@@ -31,7 +31,7 @@ func newOllamaResolver(cfg AIConfig, client *http.Client) (Resolver, error) {
 	}
 	model := cfg.Model
 	if model == "" {
-		model = "llama3"
+		model = "qwen2:1.5b"
 	}
 	return &OllamaResolver{BaseURL: url, Model: model, Client: client}, nil
 }

@@ -203,17 +203,28 @@ func ProcessConflictFile(repoRoot, targetFile string, cfg Config, runAI bool) Fi
 	}
 
 	var reportPath string
-	if jsonBytes != nil {
-		fullTokens := promptcontext.EstimateTokens(string(jsonBytes))
-		promptcontext.RegisterPromptStatistics(promptcontext.PromptStatisticsDTO{
-			File:                conflictData.FileName,
-			EstimatedTokens:     promptContext.EstimatedTokens,
-			FullPayloadTokens:   fullTokens,
-			SelectedNodes:       len(conflictScope.Nodes),
-			ExcludedNodes:       len(mergedSemanticGraph.Nodes) - len(conflictScope.Nodes),
-			ReductionPercentage: promptcontext.BuildReductionPercentage(fullTokens, promptContext.EstimatedTokens),
-		})
+	fullTokens := promptcontext.EstimateTokens(string(jsonBytes))
+	stats := promptcontext.PromptStatisticsDTO{
+		File:                conflictData.FileName,
+		EstimatedTokens:     promptContext.EstimatedTokens,
+		FullPayloadTokens:   fullTokens,
+		SelectedNodes:       len(conflictScope.Nodes),
+		ExcludedNodes:       len(mergedSemanticGraph.Nodes) - len(conflictScope.Nodes),
+		ReductionPercentage: promptcontext.BuildReductionPercentage(fullTokens, promptContext.EstimatedTokens),
+	}
+	promptcontext.RegisterPromptStatistics(stats)
+	promptcontext.RegisterAnalysis(promptcontext.FileAnalysis{
+		File:              conflictData.FileName,
+		RepositorySummary: fmt.Sprintf("Repository root: %s", repoRoot),
+		PromptContext:     promptContext,
+		PromptStatistics:  stats,
+		BaseAST:           baseASTData,
+		OurAST:            ourASTData,
+		TheirAST:          theirASTData,
+		SmartDiff:         smartDiff,
+	})
 
+	if jsonBytes != nil {
 		path, saveErr := report.SaveReportFile(jsonBytes, repoRoot, conflictData.FileName)
 		if saveErr != nil {
 			fmt.Fprintf(&buf, "Warning: failed to save report file: %v\n", saveErr)
@@ -253,7 +264,7 @@ func ProcessConflictFile(repoRoot, targetFile string, cfg Config, runAI bool) Fi
 				for _, line := range strings.Split(res.SuggestedCode, "\n") {
 					fmt.Fprintf(&buf, "         %s\n", line)
 				}
-				
+
 			}
 		}
 	}

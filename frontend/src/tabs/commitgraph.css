@@ -1,0 +1,197 @@
+.commitgraph-page {
+  width: 100%;
+  min-height: calc(100vh - 60px);
+  padding: 45px;
+  background-color: #f8f9fb;
+}
+
+.commitgraph-page h1 {
+  margin: 0 0 18px;
+  font-size: 34px;
+  color: #171b2d;
+}
+
+.graph-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 28px;
+  color: #667085;
+}
+
+.graph-summary span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid #dde2ea;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+  font-weight: 600;
+}
+
+.graph-card {
+  background: white;
+  border: 1px solid #dde2ea;
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.05);
+}
+
+.tree-view {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-node {
+  position: relative;
+  margin-bottom: 20px;
+  padding-left: 26px;
+}
+
+.tree-node::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  background: #7c3aed;
+  border-radius: 50%;
+}
+
+.tree-node::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 24px;
+  bottom: 0;
+  width: 2px;
+  background: #e2e8f0;
+}
+
+.tree-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px;
+  background: #f8f5ff;
+  border-radius: 16px;
+  border: 1px solid #e9e4f7;
+}
+
+.tree-label .node-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  word-break: break-word;
+}
+
+.tree-label .node-meta {
+  font-size: 13px;
+  color: #525f7f;
+}
+
+.tree-children {
+  margin: 18px 0 0;
+  padding-left: 0;
+}
+
+.tree-branch {
+  margin-bottom: 18px;
+}
+
+.tree-branch-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #4f46e5;
+  margin-bottom: 12px;
+}
+
+.tree-leaf {
+  padding: 14px 18px;
+  background: #ffffff;
+  border: 1px solid #dde2ea;
+  border-radius: 14px;
+  margin-bottom: 12px;
+}
+
+.tree-leaf pre {
+  margin: 10px 0 0;
+  padding: 14px;
+  background: #1e1e2f;
+  color: #e6e6ff;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.status-badge {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.edge-list-card {
+  margin-top: 26px;
+  padding: 22px;
+  border-radius: 20px;
+  background: #fbfbff;
+  border: 1px solid #e9e6ff;
+}
+
+.edge-list-card h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  color: #171b2d;
+}
+
+.edge-list-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.edge-list-card li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background: white;
+  border: 1px solid #dde2ea;
+  border-radius: 14px;
+  color: #344054;
+}
+
+.edge-list-card li strong {
+  color: #5b21b6;
+}
+
+.edge-type {
+  margin-left: auto;
+  font-size: 13px;
+  color: #667085;
+  background: #eef2ff;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.no-graph {
+  padding: 40px;
+  background: white;
+  border: 1px solid #dde2ea;
+  border-radius: 18px;
+  color: #667085;
+}

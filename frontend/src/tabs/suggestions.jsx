@@ -1,193 +1,83 @@
-import { useEffect, useState } from "react";
-import "./suggestions.css"
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import './suggestions.css'
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080'
 
 function Suggestions() {
-    const [details, setDetails] = useState(null);
-    const [loading, setLoading] = useState(true);
+  const location = useLocation()
+  const query = new URLSearchParams(location.search)
+  const file = query.get('file') || ''
 
-    useEffect(() => {
-        fetch("http://localhost:8080/api/suggestions")
-            .then((response) => response.json())
-            .then((data) => {
-                console.log(data);
-                setDetails(data);
-                setLoading(false);
-            })
-            .catch((error) => {
-                console.error("Error fetching suggestions:", error);
-                setLoading(false);
-            });
-    }, []);
+  const [suggestions, setSuggestions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-    if (loading) {
-        return <h2>Loading suggestions...</h2>;
-    }
+  useEffect(() => {
+    const url = file ? `${API_BASE}/api/suggestions?file=${encodeURIComponent(file)}` : `${API_BASE}/api/suggestions`
+    fetch(url)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!payload?.success) {
+          throw new Error(payload?.error?.message || 'Failed to load suggestions')
+        }
+        setSuggestions(payload.data || [])
+      })
+      .catch((err) => {
+        console.error('Error fetching suggestions:', err)
+        setError(err.message)
+      })
+      .finally(() => setLoading(false))
+  }, [file])
 
-    return (
-        <div className="suggestions-page">
+  if (loading) {
+    return <h2>Loading suggestions...</h2>
+  }
 
-            {/* PAGE HEADER */}
-            <div className="suggestions-header">
+  if (error) {
+    return <h2>Error loading suggestions: {error}</h2>
+  }
 
-                <h1>AI Suggestion</h1>
+  return (
+    <div className="suggestions-page">
+      <div className="suggestions-header">
+        <h1>AI Suggestions</h1>
+        <p>{file ? `AI suggestions for ${file}` : 'AI-generated resolution suggestions for current merge conflicts.'}</p>
+      </div>
 
-                <p>
-                    AI-generated resolution suggestion for the current conflict
-                </p>
-
-            </div>
-            {/* INFO CARDS */}
-            <div className="suggestion-info-row">
-
-                {/* REPOSITORY */}
-                <div className="suggestion-info-card">
-
-                    <div className="info-icon">
-                        <i className="fa-regular fa-folder"></i>
-                    </div>
-
-                    <div>
-                        <span className="info-label">
-                            Repository
-                        </span>
-
-                        <h4>
-                            {details?.repo}
-                        </h4>
-                    </div>
-
+      {suggestions.length === 0 ? (
+        <div className="empty-state">No suggestions available yet.</div>
+      ) : (
+        suggestions.map((item, index) => (
+          <div className="ai-suggestion-card" key={`${item.file}-${index}`}>
+            <div className="ai-suggestion-title">
+              <div className="suggestion-meta">
+                <div className="ai-suggestion-icon">AI</div>
+                <div>
+                  <h3>{item.file}</h3>
+                  <p>{item.collision?.kind} {item.collision?.name} · Line {item.collision?.line}</p>
                 </div>
-
-
-                {/* CURRENT BRANCH */}
-                <div className="suggestion-info-card">
-
-                    <div className="info-icon">
-                        <i className="fa-solid fa-code-branch"></i>
-                    </div>
-
-                    <div>
-                        <span className="info-label">
-                            Current Branch
-                        </span>
-
-                        <h4>
-                            {details?.current}
-                        </h4>
-                    </div>
-
-                </div>
-
-
-                {/* CONFIDENCE */}
-                <div className="suggestion-info-card">
-
-                    <div className="info-icon">
-                        <i className="fa-solid fa-shield-halved"></i>
-                    </div>
-
-                    <div>
-                        <span className="info-label">
-                            Confidence
-                        </span>
-
-                        <h4 className="confidence-value">
-                            {details?.confidence}
-                        </h4>
-                    </div>
-
-                </div>
-                </div>
-
-                {/* CONFLICTED FILE */}
-
-                <div className="conflicted-file-card">
-
-                    <div className="conflicted-file-header">
-
-                        <div className="conflicted-file-info">
-
-                            <div className="file-icon">
-                                <i className="fa-regular fa-file-lines"></i>
-                            </div>
-
-                            <div>
-                                <span className="info-label">
-                                    Conflicted File
-                                </span>
-
-                                <h3>
-                                    {details?.file}
-                                </h3>
-                            </div>
-
-                        </div>
-
-
-                        <div className="confidence-badge">
-                            High Confidence
-                        </div>
-
-                    </div>
-
-
-                    <div className="confidence-bar-container">
-
-                        <div className="confidence-bar">
-
-                            <div
-                                className="confidence-fill"
-                                style={{ width: "94%" }}
-                            ></div>
-
-                        </div>
-
-                        <span className="confidence-percent">
-                            94%
-                        </span>
-
-                    </div>
-
-                </div>
-
-                {/* AI SUGGESTION */}
-
-                <div className="ai-suggestion-card">
-
-                    <div className="ai-suggestion-title">
-
-                        <div className="ai-suggestion-icon">
-                            <i className="fa-solid fa-wand-magic-sparkles"></i>
-                        </div>
-
-                        <div>
-                            <span className="info-label">
-                                AI Suggested Resolution
-                            </span>
-
-                            <h3>
-                                Suggestion
-                            </h3>
-                        </div>
-
-                    </div>
-
-
-                    <div className="ai-suggestion-content">
-
-                        <p>
-                            {details?.suggestion}
-                        </p>
-
-                    </div>
-
-                </div>
-
+              </div>
+              <div className="ai-suggestion-score">
+                {item.resolution?.confidence_score ?? item.resolution?.confidence ?? 'N/A'}%
+              </div>
             </div>
 
-        
-
-    )
+            <div className="ai-suggestion-content">
+              <div className="ai-suggestion-block">
+                <strong>Explanation</strong>
+                <p>{item.resolution?.explanation || 'No explanation provided.'}</p>
+              </div>
+              <div className="ai-suggestion-block">
+                <strong>Suggested Code</strong>
+                <pre>{item.resolution?.suggested_code || 'No suggested code available.'}</pre>
+              </div>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )
 }
 
 export default Suggestions;
