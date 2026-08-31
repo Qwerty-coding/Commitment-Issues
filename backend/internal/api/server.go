@@ -65,10 +65,13 @@ func StartGraphServer(addr string) {
 	staticPath := filepath.Join("..", "frontend", "dist")
 	if _, err := os.Stat(staticPath); err == nil {
 		fileServer := http.FileServer(http.Dir(staticPath))
+		fmt.Printf("Serving static files from %s\n", staticPath)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				// API routes are handled separately.
 				w.WriteHeader(http.StatusNotFound)
+				fmt.Printf("StartGraphServer: API route not found: %s\n", r.URL.Path)
 				return
 			}
 
@@ -157,25 +160,7 @@ func StartGraphServer(addr string) {
 		writeJSON(w, http.StatusOK, promptListResponse{Success: true, Data: promptcontext.AllPromptContexts()})
 	})
 
-	mux.HandleFunc("/api/prompt/statistics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-
-		file := r.URL.Query().Get("file")
-		if file != "" {
-			s, ok := promptcontext.GetPromptStatistics(file)
-			if !ok {
-				writeJSON(w, http.StatusNotFound, errorResponse{Success: false, Error: struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				}{Code: "CONFLICT_NOT_FOUND", Message: fmt.Sprintf("No statistics generated yet for %s", file)}})
-				return
-			}
-			writeJSON(w, http.StatusOK, promptStatsResponse{Success: true, Data: s})
-			return
-		}
-
-		writeJSON(w, http.StatusOK, promptStatsListResponse{Success: true, Data: promptcontext.AllPromptStatistics()})
-	})
+	// /api/prompt/statistics has been removed: token statistics are not tracked in this build.
 
 	mux.HandleFunc("/api/suggestions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -217,7 +202,7 @@ func StartGraphServer(addr string) {
 		}{Code: "NOT_IMPLEMENTED", Message: "Graph focus is not implemented yet."}})
 	})
 
-	fmt.Printf("Graph server listening on http://localhost%s\n", addr)
+	fmt.Printf("listening on http://localhost%s\n", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Printf("Graph server error: %v\n", err)
 	}
@@ -291,16 +276,6 @@ type errorResponse struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
-}
-
-type promptStatsResponse struct {
-	Success bool                              `json:"success"`
-	Data    promptcontext.PromptStatisticsDTO `json:"data"`
-}
-
-type promptStatsListResponse struct {
-	Success bool                                `json:"success"`
-	Data    []promptcontext.PromptStatisticsDTO `json:"data"`
 }
 
 type promptResponse struct {

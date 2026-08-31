@@ -18,7 +18,7 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the interactive AST dependency graph visualization server",
 	Run: func(cmd *cobra.Command, args []string) {
-		targetPath := "."
+		targetPath := "../conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

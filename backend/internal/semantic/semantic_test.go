@@ -1,9 +1,13 @@
 package semantic
 
 import (
+	"context"
 	"testing"
 
 	parser "CommitIssues/internal/parser"
+
+	sitter "github.com/smacker/go-tree-sitter"
+	py "github.com/smacker/go-tree-sitter/python"
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -237,7 +241,7 @@ func TestGenerateSmartDiff_CollisionsSortedByName(t *testing.T) {
 func TestGenerateSmartDiff_OurChangesSortedByStatusThenLine(t *testing.T) {
 	base := parser.ASTContext{Functions: []parser.CodeElement{fn("existing", 10, "old")}}
 	ours := parser.ASTContext{Functions: []parser.CodeElement{
-		fn("newFunc", 1, "new"),    // ADDED at line 1
+		fn("newFunc", 1, "new"),   // ADDED at line 1
 		fn("existing", 10, "upd"), // UPDATED at line 10
 	}}
 	theirs := parser.ASTContext{Functions: []parser.CodeElement{fn("existing", 10, "old")}}
@@ -253,6 +257,48 @@ func TestGenerateSmartDiff_OurChangesSortedByStatusThenLine(t *testing.T) {
 	}
 	if result.OurChanges[1].Type != "UPDATED" {
 		t.Errorf("expected UPDATED second, got %q", result.OurChanges[1].Type)
+	}
+}
+
+func TestGetLanguageForFile_UsesCorrectGrammarByExtension(t *testing.T) {
+	tests := []string{"sample.py", "main.go", "component.tsx", "app.ts", "index.js", "server.java", "service.cs", "route.php", "model.rb", "main.rs"}
+	for _, name := range tests {
+		if parser.GetLanguageForFile(name) == nil {
+			t.Fatalf("expected language for %s to resolve to a tree-sitter grammar", name)
+		}
+	}
+}
+
+func TestExtractData_PythonFunctionDefinitions(t *testing.T) {
+	code := []byte(`def apply_promotional_discounts(order, coupon_code=None):
+    if not coupon_code:
+        return 0
+
+    return order.total_discount
+
+class OrderProcessingEngine:
+    def trigger_payment_capture(self, token):
+        return token
+`)
+
+	p := sitter.NewParser()
+	p.SetLanguage(py.GetLanguage())
+	tree, err := p.ParseCtx(context.Background(), nil, code)
+	if err != nil {
+		t.Fatalf("python parse failed: %v", err)
+	}
+	if tree == nil {
+		t.Fatal("python parse returned nil tree")
+	}
+
+	ctx := parser.ASTContext{}
+	parser.ExtractData(tree.RootNode(), code, &ctx)
+
+	if len(ctx.Functions) < 2 {
+		t.Fatalf("expected Python function definitions to be extracted, got %d functions: %#v", len(ctx.Functions), ctx.Functions)
+	}
+	if got := ctx.Functions[0].Name; got != "apply_promotional_discounts" && got != "trigger_payment_capture" {
+		t.Fatalf("unexpected first function name %q", got)
 	}
 }
 

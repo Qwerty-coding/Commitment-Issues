@@ -24,7 +24,6 @@ type FileAnalysis struct {
 	File              string                   `json:"file"`
 	RepositorySummary string                   `json:"repositorySummary"`
 	PromptContext     PromptContextIR          `json:"promptContext"`
-	PromptStatistics  PromptStatisticsDTO      `json:"promptStatistics"`
 	BaseAST           parser.ASTContext        `json:"baseAst"`
 	OurAST            parser.ASTContext        `json:"ourAst"`
 	TheirAST          parser.ASTContext        `json:"theirAst"`

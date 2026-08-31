@@ -3,18 +3,32 @@ package parser
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	c "github.com/smacker/go-tree-sitter/c"
+	cpp "github.com/smacker/go-tree-sitter/cpp"
+	csharp "github.com/smacker/go-tree-sitter/csharp"
+	golang "github.com/smacker/go-tree-sitter/golang"
+	html "github.com/smacker/go-tree-sitter/html"
+	java "github.com/smacker/go-tree-sitter/java"
+	js "github.com/smacker/go-tree-sitter/javascript"
+	php "github.com/smacker/go-tree-sitter/php"
+	py "github.com/smacker/go-tree-sitter/python"
+	ruby "github.com/smacker/go-tree-sitter/ruby"
+	rust "github.com/smacker/go-tree-sitter/rust"
+	tsx "github.com/smacker/go-tree-sitter/typescript/tsx"
+	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
 
 type CodeElement struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Line    int    `json:"line"`
-	Content string `json:"content"`
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Line    int      `json:"line"`
+	Content string   `json:"content"`
 	Calls   []string `json:"calls,omitempty"`
 }
 
@@ -30,6 +44,40 @@ func NormalizeUTF8(input []byte) []byte {
 	}
 
 	return input
+}
+
+func GetLanguageForFile(filename string) *sitter.Language {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".py":
+		return py.GetLanguage()
+	case ".go":
+		return golang.GetLanguage()
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return js.GetLanguage()
+	case ".ts":
+		return typescript.GetLanguage()
+	case ".tsx":
+		return tsx.GetLanguage()
+	case ".java":
+		return java.GetLanguage()
+	case ".c":
+		return c.GetLanguage()
+	case ".cc", ".cpp", ".cxx", ".hpp":
+		return cpp.GetLanguage()
+	case ".cs":
+		return csharp.GetLanguage()
+	case ".php":
+		return php.GetLanguage()
+	case ".rb":
+		return ruby.GetLanguage()
+	case ".rs":
+		return rust.GetLanguage()
+	case ".html":
+		return html.GetLanguage()
+	default:
+		return js.GetLanguage()
+	}
 }
 
 func ExtractPatternIdentifiers(node *sitter.Node, sourceCode []byte, content string) []CodeElement {
@@ -64,7 +112,6 @@ func IsFunctionLike(node *sitter.Node) bool {
 	return t == "arrow_function" || t == "function" || t == "function_expression"
 }
 
-
 func ExtractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext) {
 	extractData(node, sourceCode, contextData, "")
 }
@@ -77,12 +124,28 @@ func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, 
 	nextFunction := currentFunction
 
 	switch node.Type() {
-	case "function_declaration":
+	case "function_declaration", "function_definition":
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 			nextFunction = nameNode.Content(sourceCode)
 			contextData.Functions = append(contextData.Functions, CodeElement{
 				Name: nextFunction, Kind: "Function",
 				Line: int(node.StartPoint().Row) + 1, Content: node.Content(sourceCode),
+			})
+		}
+	case "class_definition":
+		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			contextData.Functions = append(contextData.Functions, CodeElement{
+				Name: nameNode.Content(sourceCode), Kind: "Class",
+				Line: int(node.StartPoint().Row) + 1, Content: node.Content(sourceCode),
+			})
+		}
+
+	case "assignment":
+		if left := node.ChildByFieldName("left"); left != nil && left.Type() == "identifier" {
+			name := left.Content(sourceCode)
+			contextData.Variables = append(contextData.Variables, CodeElement{
+				Name: name, Kind: "Variable",
+				Line: int(left.StartPoint().Row) + 1, Content: left.Content(sourceCode),
 			})
 		}
 
