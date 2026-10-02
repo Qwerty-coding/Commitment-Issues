@@ -120,30 +120,37 @@ func FindConflicts(ctx context.Context, scanRoot string) (map[string][]string, [
 			return nil, nil, err
 		}
 		conflictedFiles, err := git.GetConflictedFiles(ctx, repoRoot)
-		if err == nil && len(conflictedFiles) > 0 {
-			absRepoRoot, absErr := filepath.Abs(repoRoot)
-			if absErr != nil {
-				absRepoRoot = repoRoot
-			}
+		if err != nil {
+			// A discovery failure (Git error, filesystem error, cancellation) must
+			// never be reported as a successful scan.
+			return nil, nil, err
+		}
+		if len(conflictedFiles) == 0 {
+			continue
+		}
 
-			// If scanRoot is a subdirectory of repoRoot, filter files.
-			relScan, relErr := filepath.Rel(absRepoRoot, absScanRoot)
-			if relErr == nil && relScan != "." && !strings.HasPrefix(relScan, "..") {
-				var filtered []string
-				prefix := relScan + string(filepath.Separator)
-				for _, f := range conflictedFiles {
-					cleanF := filepath.Clean(f)
-					if cleanF == relScan || strings.HasPrefix(cleanF, prefix) {
-						filtered = append(filtered, f)
-					}
+		absRepoRoot, absErr := filepath.Abs(repoRoot)
+		if absErr != nil {
+			absRepoRoot = repoRoot
+		}
+
+		// If scanRoot is a subdirectory of repoRoot, filter files.
+		relScan, relErr := filepath.Rel(absRepoRoot, absScanRoot)
+		if relErr == nil && relScan != "." && !strings.HasPrefix(relScan, "..") {
+			var filtered []string
+			prefix := relScan + string(filepath.Separator)
+			for _, f := range conflictedFiles {
+				cleanF := filepath.Clean(f)
+				if cleanF == relScan || strings.HasPrefix(cleanF, prefix) {
+					filtered = append(filtered, f)
 				}
-				conflictedFiles = filtered
 			}
+			conflictedFiles = filtered
+		}
 
-			if len(conflictedFiles) > 0 {
-				sort.Strings(conflictedFiles)
-				conflictsByRepo[repoRoot] = conflictedFiles
-			}
+		if len(conflictedFiles) > 0 {
+			sort.Strings(conflictedFiles)
+			conflictsByRepo[repoRoot] = conflictedFiles
 		}
 	}
 
@@ -347,10 +354,13 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 	}
 
 	// Register run-scoped state only once every deterministic input is computed.
+	// All keys are repository-safe so identical relative paths in different
+	// repositories never overwrite one another.
 	if run != nil {
-		run.RegisterPromptContext(conflictData.FileName, promptCtx)
-		run.RegisterGraph(conflictData.FileName, graph.BuildCyGraph(conflictData.FileName, smartDiff, conflictScope))
-		run.RegisterAnalysis(promptcontext.FileAnalysis{
+		run.RegisterPromptContext(repoRoot, conflictData.FileName, promptCtx)
+		run.RegisterGraph(repoRoot, conflictData.FileName, graph.BuildCyGraph(repoRoot, conflictData.FileName, smartDiff, conflictScope))
+		run.RegisterAnalysis(repoRoot, promptcontext.FileAnalysis{
+			Repository:        repoRoot,
 			File:              conflictData.FileName,
 			RepositorySummary: fmt.Sprintf("Repository root: %s", repoRoot),
 			PromptContext:     promptCtx,

@@ -51,16 +51,28 @@ type GraphDTO struct {
 	Edges []CyEdge `json:"edges"`
 }
 
+// graphFileKey is the repository-safe key for a file. It mirrors
+// runstate.FileKey so identical relative paths in different repositories get
+// distinct graph root and node IDs.
+func graphFileKey(repoRoot, fileName string) string {
+	if repoRoot == "" {
+		return fileName
+	}
+	return repoRoot + "|" + fileName
+}
+
 // BuildCyGraph builds a deterministic, duplicate-free Cytoscape graph for a
 // single conflicted file. Node and edge order is stable regardless of map
-// iteration order, so repeated scans produce identical output.
-func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs ...semantic.SemanticGraph) CyGraph {
+// iteration order, so repeated scans produce identical output. repoRoot scopes
+// the generated root and node IDs so graphs from different repositories never
+// collide.
+func BuildCyGraph(repoRoot, fileName string, diff semantic.SmartDiffResult, semanticGraphs ...semantic.SemanticGraph) CyGraph {
 	nodes := []CyNode{}
 	edges := []CyEdge{}
 	nodeIDByKey := make(map[string]string)
 	seenNodeIDs := make(map[string]struct{})
 
-	rootID := "file__" + sanitizeID(fileName)
+	rootID := "file__" + sanitizeID(graphFileKey(repoRoot, fileName))
 	appendNode := func(node CyNode) {
 		if _, exists := seenNodeIDs[node.Data.ID]; exists {
 			return

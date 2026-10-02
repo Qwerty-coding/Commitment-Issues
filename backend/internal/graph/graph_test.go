@@ -31,8 +31,8 @@ func nodeIDsEquivalent(g CyGraph) []string {
 }
 
 func TestBuildCyGraph_DeterministicOrdering(t *testing.T) {
-	first := BuildCyGraph("app.js", sampleDiff())
-	second := BuildCyGraph("app.js", sampleDiff())
+	first := BuildCyGraph("", "app.js", sampleDiff())
+	second := BuildCyGraph("", "app.js", sampleDiff())
 
 	if !reflect.DeepEqual(nodeIDsEquivalent(first), nodeIDsEquivalent(second)) {
 		t.Fatalf("node order is not deterministic:\n%v\n%v", nodeIDsEquivalent(first), nodeIDsEquivalent(second))
@@ -43,7 +43,7 @@ func TestBuildCyGraph_DeterministicOrdering(t *testing.T) {
 }
 
 func TestBuildCyGraph_NoDuplicateNodes(t *testing.T) {
-	g := BuildCyGraph("app.js", sampleDiff())
+	g := BuildCyGraph("", "app.js", sampleDiff())
 
 	seen := map[string]int{}
 	for _, n := range g.Elements.Nodes {
@@ -66,7 +66,7 @@ func TestBuildCyGraph_NoDuplicateNodes(t *testing.T) {
 }
 
 func TestBuildCyGraph_RootNodeFirst(t *testing.T) {
-	g := BuildCyGraph("app.js", sampleDiff())
+	g := BuildCyGraph("", "app.js", sampleDiff())
 	if len(g.Elements.Nodes) == 0 {
 		t.Fatal("expected nodes")
 	}
@@ -77,8 +77,8 @@ func TestBuildCyGraph_RootNodeFirst(t *testing.T) {
 
 func TestBuildCyGraph_StableAcrossRepeatedScans(t *testing.T) {
 	// Simulate a repeated scan producing the same graph twice.
-	first := BuildCyGraph("app.js", sampleDiff())
-	second := BuildCyGraph("app.js", sampleDiff())
+	first := BuildCyGraph("", "app.js", sampleDiff())
+	second := BuildCyGraph("", "app.js", sampleDiff())
 	merged := MergeGraphs([]CyGraph{first, second})
 
 	if len(merged.Elements.Nodes) != len(first.Elements.Nodes) {
@@ -90,8 +90,8 @@ func TestBuildCyGraph_StableAcrossRepeatedScans(t *testing.T) {
 }
 
 func TestMergeGraphs_SortsByID(t *testing.T) {
-	g1 := BuildCyGraph("z.js", sampleDiff())
-	g2 := BuildCyGraph("a.js", sampleDiff())
+	g1 := BuildCyGraph("", "z.js", sampleDiff())
+	g2 := BuildCyGraph("", "a.js", sampleDiff())
 	merged := MergeGraphs([]CyGraph{g1, g2})
 
 	ids := nodeIDsEquivalent(merged)

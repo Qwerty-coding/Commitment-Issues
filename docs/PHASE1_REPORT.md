@@ -191,3 +191,76 @@ History page is not broken while AI work proceeds:
 
 Phase 2 should reuse `runstate.Run` for resolution IDs, patches, source ranges,
 confidence and approval/validation state.
+
+---
+
+## 7. Phase 1 finalization (follow-up review)
+
+An independent review closed six remaining gaps. All are now fixed and verified
+with `go test ./...`, `go test -race ./...` and `go vet ./...`.
+
+1. **Error propagation.** `engine.FindConflicts` and `git.GetConflictedFiles` no
+   longer swallow errors. `git ls-files`, `filepath.WalkDir` and file reads all
+   propagate: a repository failure can never be reported as a successful scan,
+   and a Git failure stays distinguishable from "no conflicts found".
+2. **Filesystem cancellation.** `GetConflictedFiles` checks the context before
+   and after Git operations and before/after every filesystem operation;
+   traversal stops on cancellation, `ctx.Err()` is never discarded, and
+   cancellation returns `context.Canceled`/`context.DeadlineExceeded`, never a
+   successful result.
+3. **Repository-scoped run state.** Every collection in `runstate.Run`
+   (analyses, prompt contexts, graphs, reports, suggestions) is keyed by
+   `runstate.FileKey(repoRoot, file)` = `repoRoot + "|" + file`, and graph root
+   IDs are repository-safe (`graph.BuildCyGraph(repoRoot, file, ...)`). Identical
+   relative paths in different repositories no longer overwrite or collide.
+4. **Semantic scope traversal.** `ComputeConflictScope` seeds from *all* symbol
+   kinds (functions, methods, constructors, classes, variables, files and
+   unknown future kinds), matching the full identity first and falling back to
+   the legacy `kind:name` key only for un-identified elements; incoming and
+   outgoing edges are traversed deterministically.
+5. **Deterministic semantic output.** Ordering uses the exact tie-breaker
+   sequence `identity -> file -> kind -> name -> line -> type`
+   (`semantic.CompareDiffItems`/`SortDiffItems`), applied to collisions,
+   changes and graph-derived semantic collections. Repeated runs, worker counts
+   and map iteration order no longer affect output.
+6. **Global suggestion cache removed.** The package-level
+   `suggestionCache`/`suggestionMu` and `repoMetadata` globals in
+   `internal/api` are gone; suggestions and repository metadata now live on
+   `runstate.Run` under repository-safe keys.
+
+### Global mutable state audit
+
+Remaining package-level mutable variables and their justification:
+
+| Variable | Location | Justification |
+| --- | --- | --- |
+| `providers`, `registryMutex` | `internal/ai/ai.go` | Write-once provider registry populated at process init; guarded, static configuration, not run data. |
+| `conflictedFileExtensions` | `internal/git/git.go` | Read-only lookup table; effectively a constant. |
+| `debugLoggingEnabled` | `internal/engine/pipeline.go` | Process-wide diagnostic toggle set once from CLI flags. |
+| `rootCmd`, `*Cmd` | `cmd/*.go` | Cobra command tree constructed at init. |
+| flag binding vars (`port`, `provider`, `modelName`, ...) | `cmd/*.go` | Cobra flag targets bound once at startup. |
+
+No package-level mutable state remains for suggestions, reports, analyses,
+graphs, prompt contexts or caches.
+
+### Test coverage added in the finalization
+
+- `internal/git/discovery_test.go`: non-repository surfaces a `*GitError`;
+  empty repo is not an error; broken-symlink and (non-root) unreadable-file read
+  failures propagate; discovery cancellation.
+- `internal/engine/discovery_test.go`: `FindConflicts` surfaces a Git failure and
+  never treats cancellation as success; multi-repository pipeline isolation
+  (identical relative paths produce two analyses and two graph roots).
+- `internal/runstate/isolation_test.go`: `FileKey` scoping, identical filenames
+  in different repositories, prompt-context scoping, repository-safe graph IDs,
+  merged-graph determinism across registration order, suggestion and metadata
+  run/repository isolation.
+- `internal/semantic/scope_kinds_test.go`: class, method, constructor, variable
+  and unknown-kind collisions; legacy fallback matching.
+- `internal/semantic/determinism_test.go`: repeated-run equivalence, stable
+  tie-breaker ordering, total-order verification.
+
+Two pre-existing expectations in `internal/semantic/semantic_test.go` were
+updated (not deleted) to match the new required behavior: variable collisions
+now seed the conflict scope, and change ordering is by identity rather than by
+status.

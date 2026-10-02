@@ -238,11 +238,11 @@ func TestGenerateSmartDiff_CollisionsSortedByName(t *testing.T) {
 	}
 }
 
-func TestGenerateSmartDiff_OurChangesSortedByStatusThenLine(t *testing.T) {
+func TestGenerateSmartDiff_OurChangesSortedByIdentity(t *testing.T) {
 	base := parser.ASTContext{Functions: []parser.CodeElement{fn("existing", 10, "old")}}
 	ours := parser.ASTContext{Functions: []parser.CodeElement{
-		fn("newFunc", 1, "new"),   // ADDED at line 1
-		fn("existing", 10, "upd"), // UPDATED at line 10
+		fn("newFunc", 1, "new"),
+		fn("existing", 10, "upd"),
 	}}
 	theirs := parser.ASTContext{Functions: []parser.CodeElement{fn("existing", 10, "old")}}
 
@@ -251,12 +251,13 @@ func TestGenerateSmartDiff_OurChangesSortedByStatusThenLine(t *testing.T) {
 	if len(result.OurChanges) != 2 {
 		t.Fatalf("expected 2 OurChanges, got %d", len(result.OurChanges))
 	}
-	// ADDED (rank 0) should come before UPDATED (rank 1)
-	if result.OurChanges[0].Type != "ADDED" {
-		t.Errorf("expected ADDED first, got %q", result.OurChanges[0].Type)
+	// Canonical order is identity -> file -> kind -> name -> line -> type, so
+	// "Function:existing" sorts before "Function:newFunc".
+	if result.OurChanges[0].Name != "existing" || result.OurChanges[0].Type != "UPDATED" {
+		t.Errorf("expected existing/UPDATED first, got %s/%s", result.OurChanges[0].Name, result.OurChanges[0].Type)
 	}
-	if result.OurChanges[1].Type != "UPDATED" {
-		t.Errorf("expected UPDATED second, got %q", result.OurChanges[1].Type)
+	if result.OurChanges[1].Name != "newFunc" || result.OurChanges[1].Type != "ADDED" {
+		t.Errorf("expected newFunc/ADDED second, got %s/%s", result.OurChanges[1].Name, result.OurChanges[1].Type)
 	}
 }
 
@@ -577,9 +578,8 @@ func TestComputeConflictScope_MultipleCollisionRoots(t *testing.T) {
 	}
 }
 
-func TestComputeConflictScope_VariableCollisionIgnored(t *testing.T) {
-	// ComputeConflictScope only seeds from Function collisions.
-	// A Variable collision should not seed the BFS.
+func TestComputeConflictScope_VariableCollisionIncluded(t *testing.T) {
+	// Variable collisions must seed the BFS just like function collisions.
 	ctx := parser.ASTContext{
 		Functions: []parser.CodeElement{fn("login", 1, "code")},
 		Variables: []parser.CodeElement{variable("token", 5, "var token")},
@@ -589,8 +589,9 @@ func TestComputeConflictScope_VariableCollisionIgnored(t *testing.T) {
 	varCollision := DiffItem{Type: "COLLISION", Kind: "Variable", Name: "token"}
 	scope := ComputeConflictScope(g, []DiffItem{varCollision})
 
-	if len(scope.Nodes) != 0 {
-		t.Errorf("variable collision should not seed BFS; got %d nodes in scope", len(scope.Nodes))
+	ids := nodeIDs(scope)
+	if !ids[semanticNodeID("Variable", "token")] {
+		t.Errorf("variable collision should seed the scope; got %d nodes", len(scope.Nodes))
 	}
 }
 

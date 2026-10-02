@@ -8,49 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
 	"CommitIssues/internal/runstate"
-	semantic "CommitIssues/internal/semantic"
 )
 
-var (
-	repoMetadataMu sync.RWMutex
-	repoMetadata   RepositoryMetadata
+// RepositoryMetadata and SuggestionItem are aliases to their run-scoped
+// counterparts so the JSON shape stays identical while storage lives on the
+// run rather than in package-level globals.
+type RepositoryMetadata = runstate.RepositoryMetadata
 
-	suggestionMu    sync.Mutex
-	suggestionCache = make(map[string][]SuggestionItem)
-)
-
-type RepositoryMetadata struct {
-	Name           string `json:"name"`
-	CurrentBranch  string `json:"currentBranch"`
-	IncomingBranch string `json:"incomingBranch"`
-}
-
-type SuggestionItem struct {
-	File       string                  `json:"file"`
-	Collision  semantic.DiffItem       `json:"collision"`
-	Resolution ai.AIResolutionResponse `json:"resolution"`
-}
+type SuggestionItem = runstate.Suggestion
 
 type suggestionsResponse struct {
 	Success bool             `json:"success"`
 	Data    []SuggestionItem `json:"data"`
-}
-
-func SetRepositoryMetadata(meta RepositoryMetadata) {
-	repoMetadataMu.Lock()
-	defer repoMetadataMu.Unlock()
-	repoMetadata = meta
-}
-
-func getRepositoryMetadata() RepositoryMetadata {
-	repoMetadataMu.RLock()
-	defer repoMetadataMu.RUnlock()
-	return repoMetadata
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -108,7 +81,7 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		writeJSON(w, http.StatusOK, struct {
 			Success bool               `json:"success"`
 			Data    RepositoryMetadata `json:"data"`
-		}{Success: true, Data: getRepositoryMetadata()})
+		}{Success: true, Data: run.GetRepositoryMetadata()})
 	})
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +93,7 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		file := r.URL.Query().Get("file")
 		if file != "" {
-			analysis, ok := run.GetAnalysis(file)
+			analysis, ok := run.FindAnalysis(file)
 			if !ok {
 				writeError(w, http.StatusNotFound, "ANALYSIS_NOT_FOUND", fmt.Sprintf("No analysis generated yet for %s", file))
 				return
@@ -151,7 +124,7 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		}
 
 		if file != "" {
-			ctx, ok := run.GetPromptContext(file)
+			ctx, ok := run.FindPromptContext(file)
 			if !ok {
 				writeError(w, http.StatusNotFound, "CONFLICT_NOT_FOUND", fmt.Sprintf("No prompt context generated yet for %s", file))
 				return
@@ -191,28 +164,29 @@ func StartGraphServer(run *runstate.Run, addr string) {
 }
 
 func generateSuggestions(run *runstate.Run, file string) ([]SuggestionItem, error) {
-	suggestionMu.Lock()
-	defer suggestionMu.Unlock()
-	if items, ok := suggestionCache[file]; ok && len(items) > 0 {
-		return items, nil
-	}
-
-	analyses := run.AllAnalyses()
-	if len(analyses) == 0 {
+	if run == nil {
 		return nil, fmt.Errorf("no analysis available to generate suggestions")
 	}
 
+	var (
+		analyses []promptcontext.FileAnalysis
+		repoRoot string
+	)
+
 	if file != "" {
-		found := false
-		for _, analysis := range analyses {
-			if analysis.File == file {
-				analyses = []promptcontext.FileAnalysis{analysis}
-				found = true
-				break
-			}
-		}
-		if !found {
+		analysis, ok := run.FindAnalysis(file)
+		if !ok {
 			return nil, fmt.Errorf("no analysis found for %s", file)
+		}
+		repoRoot = analysis.Repository
+		if items, ok := run.GetSuggestions(repoRoot, file); ok && len(items) > 0 {
+			return items, nil
+		}
+		analyses = []promptcontext.FileAnalysis{analysis}
+	} else {
+		analyses = run.AllAnalyses()
+		if len(analyses) == 0 {
+			return nil, fmt.Errorf("no analysis available to generate suggestions")
 		}
 	}
 
@@ -240,8 +214,10 @@ func generateSuggestions(run *runstate.Run, file string) ([]SuggestionItem, erro
 		}
 	}
 
+	// Suggestions are stored on the run, keyed by repository-safe key. The
+	// aggregate (no file) response is intentionally not cached.
 	if file != "" {
-		suggestionCache[file] = items
+		run.SaveSuggestions(repoRoot, file, items)
 	}
 	return items, nil
 }

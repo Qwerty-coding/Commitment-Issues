@@ -42,9 +42,9 @@ func TestRun_NewRunWithID(t *testing.T) {
 
 func TestRun_RepeatedAnalysisRegistrationDoesNotDuplicate(t *testing.T) {
 	r := NewRun()
-	r.RegisterAnalysis(promptcontext.FileAnalysis{File: "a.go"})
-	r.RegisterAnalysis(promptcontext.FileAnalysis{File: "a.go"})
-	r.RegisterAnalysis(promptcontext.FileAnalysis{File: "a.go"})
+	r.RegisterAnalysis("", promptcontext.FileAnalysis{File: "a.go"})
+	r.RegisterAnalysis("", promptcontext.FileAnalysis{File: "a.go"})
+	r.RegisterAnalysis("", promptcontext.FileAnalysis{File: "a.go"})
 
 	if got := len(r.AllAnalyses()); got != 1 {
 		t.Fatalf("expected 1 analysis after repeated registration, got %d", got)
@@ -54,7 +54,7 @@ func TestRun_RepeatedAnalysisRegistrationDoesNotDuplicate(t *testing.T) {
 func TestRun_AnalysesAreSortedByFile(t *testing.T) {
 	r := NewRun()
 	for _, file := range []string{"c.go", "a.go", "b.go"} {
-		r.RegisterAnalysis(promptcontext.FileAnalysis{File: file})
+		r.RegisterAnalysis("", promptcontext.FileAnalysis{File: file})
 	}
 	got := r.AllAnalyses()
 	want := []string{"a.go", "b.go", "c.go"}
@@ -68,9 +68,9 @@ func TestRun_AnalysesAreSortedByFile(t *testing.T) {
 func TestRun_RepeatedGraphScanDoesNotDuplicateNodes(t *testing.T) {
 	r := NewRun()
 	// The same file is scanned three times (e.g. three runs in one process).
-	r.RegisterGraph("app.js", cyGraph("app.js", "fn__login"))
-	r.RegisterGraph("app.js", cyGraph("app.js", "fn__login"))
-	r.RegisterGraph("app.js", cyGraph("app.js", "fn__login"))
+	r.RegisterGraph("", "app.js", cyGraph("app.js", "fn__login"))
+	r.RegisterGraph("", "app.js", cyGraph("app.js", "fn__login"))
+	r.RegisterGraph("", "app.js", cyGraph("app.js", "fn__login"))
 
 	merged := r.MergedGraph()
 	if len(merged.Elements.Nodes) != 2 {
@@ -90,8 +90,8 @@ func TestRun_RepeatedGraphScanDoesNotDuplicateNodes(t *testing.T) {
 
 func TestRun_MergedGraphIsSorted(t *testing.T) {
 	r := NewRun()
-	r.RegisterGraph("z.js", cyGraph("z.js", "fn__z"))
-	r.RegisterGraph("a.js", cyGraph("a.js", "fn__a"))
+	r.RegisterGraph("", "z.js", cyGraph("z.js", "fn__z"))
+	r.RegisterGraph("", "a.js", cyGraph("a.js", "fn__a"))
 
 	ids := []string{}
 	for _, n := range r.MergedGraph().Elements.Nodes {
@@ -108,10 +108,10 @@ func TestRun_RunsAreIsolated(t *testing.T) {
 	first := NewRun()
 	second := NewRun()
 
-	first.RegisterAnalysis(promptcontext.FileAnalysis{File: "only-first.go"})
-	first.RegisterGraph("only-first.js", cyGraph("only-first.js", "fn__first"))
+	first.RegisterAnalysis("", promptcontext.FileAnalysis{File: "only-first.go"})
+	first.RegisterGraph("", "only-first.js", cyGraph("only-first.js", "fn__first"))
 
-	if _, ok := second.GetAnalysis("only-first.go"); ok {
+	if _, ok := second.GetAnalysis("", "only-first.go"); ok {
 		t.Error("analysis leaked from first run into second run")
 	}
 	if len(second.AllAnalyses()) != 0 {
@@ -120,7 +120,7 @@ func TestRun_RunsAreIsolated(t *testing.T) {
 	if len(second.MergedGraph().Elements.Nodes) != 0 {
 		t.Error("graph state leaked between runs")
 	}
-	if files := second.GraphFiles(); len(files) != 0 {
+	if files := second.GraphKeys(); len(files) != 0 {
 		t.Errorf("second run should have no graph files, got %v", files)
 	}
 }
@@ -152,8 +152,8 @@ func TestRun_ConcurrentRegistrationIsRaceSafe(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			file := fmt.Sprintf("file%02d.go", i%10)
-			r.RegisterAnalysis(promptcontext.FileAnalysis{File: file})
-			r.RegisterGraph(file, cyGraph(file, fmt.Sprintf("fn__%d", i%10)))
+			r.RegisterAnalysis("", promptcontext.FileAnalysis{File: file})
+			r.RegisterGraph("", file, cyGraph(file, fmt.Sprintf("fn__%d", i%10)))
 		}(i)
 	}
 	wg.Wait()
@@ -161,7 +161,7 @@ func TestRun_ConcurrentRegistrationIsRaceSafe(t *testing.T) {
 	if got := len(r.AllAnalyses()); got != 10 {
 		t.Errorf("expected 10 unique analyses, got %d", got)
 	}
-	if got := len(r.GraphFiles()); got != 10 {
+	if got := len(r.GraphKeys()); got != 10 {
 		t.Errorf("expected 10 unique graph files, got %d", got)
 	}
 }

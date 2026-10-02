@@ -10,6 +10,9 @@ import (
 
 // FileAnalysis bundles everything the API can expose about one analyzed file.
 type FileAnalysis struct {
+	// Repository is the canonical repository root the file belongs to. It keeps
+	// state for identical relative paths in different repositories separate.
+	Repository        string                   `json:"repository,omitempty"`
 	File              string                   `json:"file"`
 	RepositorySummary string                   `json:"repositorySummary"`
 	PromptContext     PromptContextIR          `json:"promptContext"`

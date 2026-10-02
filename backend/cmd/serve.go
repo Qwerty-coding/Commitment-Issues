@@ -44,16 +44,16 @@ var serveCmd = &cobra.Command{
 			fmt.Printf("Error scanning for conflicts: %v\n", err)
 		}
 
+		run := runstate.NewRun()
+
 		if len(repoRoots) > 0 {
 			repoRoot := repoRoots[0]
-			api.SetRepositoryMetadata(api.RepositoryMetadata{
+			run.SetRepositoryMetadata(runstate.RepositoryMetadata{
 				Name:           filepath.Base(repoRoot),
 				CurrentBranch:  git.CurrentBranch(repoRoot),
 				IncomingBranch: git.IncomingBranch(repoRoot),
 			})
 		}
-
-		run := runstate.NewRun()
 		for _, repoRoot := range repoRoots {
 			conflicts := conflictsByRepo[repoRoot]
 			if len(conflicts) == 0 {

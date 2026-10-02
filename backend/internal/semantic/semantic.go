@@ -17,6 +17,8 @@ type DiffItem struct {
 	BaseContent  string `json:"base_content,omitempty"`
 	OurContent   string `json:"our_content,omitempty"`
 	TheirContent string `json:"their_content,omitempty"`
+	// File is the source file, used as the second deterministic sort key.
+	File string `json:"file,omitempty"`
 	// Identity is the precise symbol identity (file + scope + kind + name +
 	// signature) when available, falling back to kind:name.
 	Identity string `json:"identity,omitempty"`
@@ -101,12 +103,14 @@ func BuildDiffItem(status string, baseEl, sideEl parser.CodeElement, isOurs bool
 
 	if status == "DELETED" {
 		item.Kind, item.Name, item.Line = baseEl.Kind, baseEl.Name, baseEl.Line
+		item.File = elementFile(baseEl, sideEl)
 		item.BaseContent = baseEl.Content
 		item.Identity = SymbolIdentity(baseEl)
 		return item
 	}
 
 	item.Kind, item.Name, item.Line = sideEl.Kind, sideEl.Name, sideEl.Line
+	item.File = elementFile(baseEl, sideEl)
 	item.Identity = SymbolIdentity(sideEl)
 	if status == "UPDATED" {
 		item.BaseContent = baseEl.Content
@@ -117,6 +121,48 @@ func BuildDiffItem(status string, baseEl, sideEl parser.CodeElement, isOurs bool
 		item.TheirContent = sideEl.Content
 	}
 	return item
+}
+
+// elementFile picks the source file for a diff item, preferring the side that
+// actually carries the change and falling back to the base element.
+func elementFile(baseEl, sideEl parser.CodeElement) string {
+	if sideEl.File != "" {
+		return sideEl.File
+	}
+	return baseEl.File
+}
+
+// CompareDiffItems defines the exact deterministic ordering used for every
+// semantic output collection:
+//
+//	identity -> file -> kind -> name -> line -> type
+func CompareDiffItems(a, b DiffItem) int {
+	if c := strings.Compare(a.Identity, b.Identity); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.File, b.File); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	if a.Line != b.Line {
+		if a.Line < b.Line {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a.Type, b.Type)
+}
+
+// SortDiffItems sorts a slice in place using the canonical deterministic order.
+func SortDiffItems(items []DiffItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return CompareDiffItems(items[i], items[j]) < 0
+	})
 }
 
 // GenerateSmartDiffContext is GenerateSmartDiff with cancellation support so
@@ -166,6 +212,7 @@ func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
 		if isChangeSide(ourStat) && isChangeSide(theirStat) && ourEl.Content != theirEl.Content {
 			result.Collisions = append(result.Collisions, DiffItem{
 				Type: "COLLISION", Kind: ourEl.Kind, Name: ourEl.Name, Line: ourEl.Line,
+				File:        elementFile(baseEl, ourEl),
 				BaseContent: baseEl.Content, OurContent: ourEl.Content, TheirContent: theirEl.Content,
 				Identity: sig,
 			})
@@ -180,18 +227,11 @@ func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
 		}
 	}
 
-	statusRank := map[string]int{"ADDED": 0, "UPDATED": 1, "DELETED": 2}
-	sortChanges := func(list []DiffItem) {
-		sort.Slice(list, func(i, j int) bool {
-			if statusRank[list[i].Type] != statusRank[list[j].Type] {
-				return statusRank[list[i].Type] < statusRank[list[j].Type]
-			}
-			return list[i].Line < list[j].Line
-		})
-	}
-	sortChanges(result.OurChanges)
-	sortChanges(result.TheirChanges)
-	sort.Slice(result.Collisions, func(i, j int) bool { return result.Collisions[i].Name < result.Collisions[j].Name })
+	// Every collection is emitted in the canonical deterministic order so that
+	// map iteration order can never influence output.
+	SortDiffItems(result.OurChanges)
+	SortDiffItems(result.TheirChanges)
+	SortDiffItems(result.Collisions)
 
 	return result
 }
@@ -259,6 +299,10 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 		}
 	}
 
+	// Emit nodes and edges in a stable order so graph-derived results are
+	// independent of map iteration order.
+	sortSemanticGraph(&result)
+
 	return result
 }
 
@@ -290,7 +334,15 @@ func MergeSemanticGraphs(graphs ...SemanticGraph) SemanticGraph {
 		}
 	}
 
+	sortSemanticGraph(&merged)
+
 	return merged
+}
+
+// sortSemanticGraph orders nodes and edges by ID for deterministic output.
+func sortSemanticGraph(g *SemanticGraph) {
+	sort.SliceStable(g.Nodes, func(i, j int) bool { return g.Nodes[i].ID < g.Nodes[j].ID })
+	sort.SliceStable(g.Edges, func(i, j int) bool { return g.Edges[i].ID < g.Edges[j].ID })
 }
 
 func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictScope {
@@ -326,13 +378,17 @@ func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictSc
 	scopeNodes := make(map[string]SemanticNode)
 	scopeEdges := make(map[string]SemanticEdge)
 
-	for _, collision := range collisions {
-		if !strings.EqualFold(collision.Kind, "Function") {
-			continue
-		}
+	// Seed traversal from every collision, regardless of symbol kind (functions,
+	// methods, constructors, classes, variables, files and future kinds). Match
+	// the precise identity first and fall back to the legacy kind:name key.
+	seedCollisions := append([]DiffItem(nil), collisions...)
+	sort.SliceStable(seedCollisions, func(i, j int) bool {
+		return CompareDiffItems(seedCollisions[i], seedCollisions[j]) < 0
+	})
+	for _, collision := range seedCollisions {
 		root, ok := nodeByKey[DiffKey(collision)]
 		if !ok {
-			root, ok = nodeByKey[semanticNodeKey("Function", collision.Name)]
+			root, ok = nodeByKey[semanticNodeKey(collision.Kind, collision.Name)]
 		}
 		if ok {
 			if _, seen := visited[root.ID]; !seen {

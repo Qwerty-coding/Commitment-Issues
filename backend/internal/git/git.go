@@ -204,31 +204,49 @@ var conflictedFileExtensions = map[string]struct{}{
 
 // GetConflictedFiles returns the deterministically sorted list of files that
 // are conflicted in the repository, including inline-only conflicts.
+//
+// Every failure is propagated: a Git command failure or a filesystem walking
+// failure (including permission errors) is returned as an error, never
+// silently converted into an empty "no conflicts" result. Context cancellation
+// is always reported as the underlying context error.
 func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	files := make([]string, 0)
-	seen := make(map[string]bool)
-
+	// Git discovery runs first. A failure here is a real repository failure and
+	// must be surfaced rather than treated as "no conflicts".
 	unmerged, err := listUnmerged(ctx, repoDir)
-	if err == nil {
-		for file := range unmerged {
-			if !seen[file] {
-				files = append(files, file)
-				seen[file] = true
-			}
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	files := make([]string, 0, len(unmerged))
+	seen := make(map[string]bool, len(unmerged))
+	for file := range unmerged {
+		if !seen[file] {
+			files = append(files, file)
+			seen[file] = true
 		}
 	}
 
-	// Scan filesystem for files containing inline conflict markers.
-	_ = filepath.WalkDir(repoDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
+	// Scan the filesystem for explicitly non-staged fixture files that carry
+	// inline conflict markers. WalkDir errors and read failures are propagated.
+	walkErr := filepath.WalkDir(repoDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		if d.IsDir() {
 			switch d.Name() {
@@ -239,7 +257,10 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 		}
 
 		rel, relErr := filepath.Rel(repoDir, path)
-		if relErr != nil || seen[rel] {
+		if relErr != nil {
+			return relErr
+		}
+		if seen[rel] {
 			return nil
 		}
 
@@ -249,7 +270,10 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return nil
+			return fmt.Errorf("failed to read %s while scanning for conflicts: %w", rel, readErr)
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		if result := ParseConflictRegions(string(data)); len(result.Regions) > 0 {
 			files = append(files, rel)
@@ -257,6 +281,15 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 		}
 		return nil
 	})
+	if walkErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, walkErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	sort.Strings(files)
 	return files, nil
@@ -494,13 +527,18 @@ func ExtractConflictVersions(ctx context.Context, repoDir, filename string) (Con
 	cleanFilename := strings.TrimSpace(filename)
 
 	unmerged, listErr := listUnmerged(ctx, repoDir)
-	if listErr == nil {
-		if stages, staged := unmerged[cleanFilename]; staged && len(stages) > 0 {
-			return extractStagedVersions(ctx, repoDir, cleanFilename, stages)
+	if listErr != nil {
+		// Never swallow cancellation: it must surface as a context error rather
+		// than being converted into an inline fixture fallback.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ConflictData{}, ctxErr
 		}
+	} else if stages, staged := unmerged[cleanFilename]; staged && len(stages) > 0 {
+		return extractStagedVersions(ctx, repoDir, cleanFilename, stages)
 	}
 
-	// Not staged (or index unavailable): parse inline markers from disk.
+	// Not staged (or the Git index is unavailable, e.g. an explicitly non-staged
+	// fixture directory): parse inline markers from disk.
 	return extractInlineVersions(repoDir, cleanFilename)
 }
 

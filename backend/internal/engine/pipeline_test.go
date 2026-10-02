@@ -261,7 +261,7 @@ func TestProcessConflictFile_PreservesMultipleRegions(t *testing.T) {
 	if outcome.Err != nil {
 		t.Fatalf("unexpected error: %v", outcome.Err)
 	}
-	analysis, ok := run.GetAnalysis("multi.js")
+	analysis, ok := run.GetAnalysis(dir, "multi.js")
 	if !ok {
 		t.Fatal("analysis should be registered")
 	}
