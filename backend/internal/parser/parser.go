@@ -30,6 +30,12 @@ type CodeElement struct {
 	Line    int      `json:"line"`
 	Content string   `json:"content"`
 	Calls   []string `json:"calls,omitempty"`
+	// File is the source file the element was extracted from.
+	File string `json:"file,omitempty"`
+	// Scope is the dotted path of enclosing named scopes (e.g. "OrderEngine.charge").
+	Scope string `json:"scope,omitempty"`
+	// Signature is the raw parameter list text, used to distinguish overloads.
+	Signature string `json:"signature,omitempty"`
 }
 
 type ASTContext struct {
@@ -112,40 +118,86 @@ func IsFunctionLike(node *sitter.Node) bool {
 	return t == "arrow_function" || t == "function" || t == "function_expression"
 }
 
+// ExtractData extracts functions and variables from a parsed tree. File, scope
+// and signature metadata are also populated where the grammar exposes them.
 func ExtractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext) {
-	extractData(node, sourceCode, contextData, "")
+	extractData(node, sourceCode, contextData, "", "")
 }
 
-func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, currentFunction string) {
+// ExtractDataForFile is ExtractData plus a file label applied to every element,
+// so symbol identities can be scoped to a file.
+func ExtractDataForFile(node *sitter.Node, sourceCode []byte, file string, contextData *ASTContext) {
+	extractData(node, sourceCode, contextData, "", "")
+	for i := range contextData.Functions {
+		contextData.Functions[i].File = file
+	}
+	for i := range contextData.Variables {
+		contextData.Variables[i].File = file
+	}
+}
+
+func signatureOf(node *sitter.Node, sourceCode []byte) string {
+	if node == nil {
+		return ""
+	}
+	if params := node.ChildByFieldName("parameters"); params != nil {
+		return params.Content(sourceCode)
+	}
+	return ""
+}
+
+func joinScope(parent, name string) string {
+	switch {
+	case parent == "":
+		return name
+	case name == "":
+		return parent
+	default:
+		return parent + "." + name
+	}
+}
+
+func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, scope, currentFunction string) {
 	if node == nil {
 		return
 	}
 
 	nextFunction := currentFunction
+	nextScope := scope
 
 	switch node.Type() {
 	case "function_declaration", "function_definition":
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-			nextFunction = nameNode.Content(sourceCode)
+			name := nameNode.Content(sourceCode)
+			nextFunction = name
+			nextScope = joinScope(scope, name)
 			contextData.Functions = append(contextData.Functions, CodeElement{
-				Name: nextFunction, Kind: "Function",
-				Line: int(node.StartPoint().Row) + 1, Content: node.Content(sourceCode),
+				Name:      name,
+				Kind:      "Function",
+				Line:      int(node.StartPoint().Row) + 1,
+				Content:   node.Content(sourceCode),
+				Scope:     scope,
+				Signature: signatureOf(node, sourceCode),
 			})
 		}
 	case "class_definition":
 		if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+			name := nameNode.Content(sourceCode)
+			nextScope = joinScope(scope, name)
 			contextData.Functions = append(contextData.Functions, CodeElement{
-				Name: nameNode.Content(sourceCode), Kind: "Class",
-				Line: int(node.StartPoint().Row) + 1, Content: node.Content(sourceCode),
+				Name: name, Kind: "Class",
+				Line:    int(node.StartPoint().Row) + 1,
+				Content: node.Content(sourceCode),
+				Scope:   scope,
 			})
 		}
 
 	case "assignment":
 		if left := node.ChildByFieldName("left"); left != nil && left.Type() == "identifier" {
-			name := left.Content(sourceCode)
 			contextData.Variables = append(contextData.Variables, CodeElement{
-				Name: name, Kind: "Variable",
+				Name: left.Content(sourceCode), Kind: "Variable",
 				Line: int(left.StartPoint().Row) + 1, Content: left.Content(sourceCode),
+				Scope: scope,
 			})
 		}
 
@@ -153,7 +205,7 @@ func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, 
 		for i := 0; i < int(node.ChildCount()); i++ {
 			child := node.Child(i)
 			if child.Type() != "variable_declarator" {
-				extractData(child, sourceCode, contextData, currentFunction)
+				extractData(child, sourceCode, contextData, scope, currentFunction)
 				continue
 			}
 
@@ -173,23 +225,31 @@ func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, 
 				line := int(nameNode.StartPoint().Row) + 1
 				name := nameNode.Content(sourceCode)
 				childFunction := currentFunction
+				childScope := scope
 				if IsFunctionLike(valueNode) {
 					childFunction = name
+					childScope = joinScope(scope, name)
 					contextData.Functions = append(contextData.Functions, CodeElement{
 						Name: name, Kind: "Function", Line: line, Content: valueContent,
+						Scope: scope, Signature: signatureOf(valueNode, sourceCode),
 					})
 				} else {
 					contextData.Variables = append(contextData.Variables, CodeElement{
 						Name: name, Kind: "Variable", Line: line, Content: valueContent,
+						Scope: scope,
 					})
 				}
 				if valueNode != nil {
-					extractData(valueNode, sourceCode, contextData, childFunction)
+					extractData(valueNode, sourceCode, contextData, childScope, childFunction)
 				}
 			case "array_pattern", "object_pattern":
-				contextData.Variables = append(contextData.Variables, ExtractPatternIdentifiers(nameNode, sourceCode, valueContent)...)
+				identifiers := ExtractPatternIdentifiers(nameNode, sourceCode, valueContent)
+				for i := range identifiers {
+					identifiers[i].Scope = scope
+				}
+				contextData.Variables = append(contextData.Variables, identifiers...)
 				if valueNode != nil {
-					extractData(valueNode, sourceCode, contextData, currentFunction)
+					extractData(valueNode, sourceCode, contextData, scope, currentFunction)
 				}
 			}
 		}
@@ -225,6 +285,6 @@ func extractData(node *sitter.Node, sourceCode []byte, contextData *ASTContext, 
 	}
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		extractData(node.Child(i), sourceCode, contextData, nextFunction)
+		extractData(node.Child(i), sourceCode, contextData, nextScope, nextFunction)
 	}
 }

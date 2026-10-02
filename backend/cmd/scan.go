@@ -11,7 +11,7 @@ import (
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Scan directory for Git merge conflicts",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
@@ -19,10 +19,9 @@ var scanCmd = &cobra.Command{
 		scanRoot := engine.ResolveScanRoot(targetPath)
 		fmt.Printf("Scanning for Git repositories under: %s\n\n", scanRoot)
 
-		conflictsByRepo, repoRoots, err := engine.FindConflicts(scanRoot)
+		conflictsByRepo, repoRoots, err := engine.FindConflicts(cmd.Context(), scanRoot)
 		if err != nil {
-			fmt.Println("Error:", err)
-			return
+			return err
 		}
 
 		for _, repoRoot := range repoRoots {
@@ -36,6 +35,7 @@ var scanCmd = &cobra.Command{
 				fmt.Printf("  - %s\n", file)
 			}
 		}
+		return nil
 	},
 }
 

@@ -12,7 +12,7 @@ import (
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
-	graph "CommitIssues/internal/graph"
+	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
 )
 
@@ -59,7 +59,20 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func StartGraphServer(addr string) {
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, errorResponse{Success: false, Error: struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message}})
+}
+
+// StartGraphServer serves the API and static frontend using the supplied
+// run-scoped state. A nil run is treated as an empty run.
+func StartGraphServer(run *runstate.Run, addr string) {
+	if run == nil {
+		run = runstate.NewRun()
+	}
+
 	mux := http.NewServeMux()
 
 	staticPath := filepath.Join("..", "frontend", "dist")
@@ -67,23 +80,19 @@ func StartGraphServer(addr string) {
 		fileServer := http.FileServer(http.Dir(staticPath))
 		fmt.Printf("Serving static files from %s\n", staticPath)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-
 			if strings.HasPrefix(r.URL.Path, "/api/") {
-				// API routes are handled separately.
-				w.WriteHeader(http.StatusNotFound)
-				fmt.Printf("StartGraphServer: API route not found: %s\n", r.URL.Path)
+				writeError(w, http.StatusNotFound, "NOT_FOUND", "API route not found: "+r.URL.Path)
 				return
 			}
 
 			assetPath := filepath.Join(staticPath, filepath.Clean(r.URL.Path))
 			if r.URL.Path != "/" {
-				if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
+				if info, statErr := os.Stat(assetPath); statErr == nil && !info.IsDir() {
 					fileServer.ServeHTTP(w, r)
 					return
 				}
 			}
 
-			// Serve index.html for client-side routes.
 			http.ServeFile(w, r, filepath.Join(staticPath, "index.html"))
 		})
 	} else {
@@ -104,19 +113,16 @@ func StartGraphServer(addr string) {
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		writeJSON(w, http.StatusOK, standardResponse{Success: true, Message: "", Data: graph.MergedGraphDTO()})
+		writeJSON(w, http.StatusOK, standardResponse{Success: true, Message: "", Data: run.MergedGraphDTO()})
 	})
 
 	mux.HandleFunc("/api/analysis", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		file := r.URL.Query().Get("file")
 		if file != "" {
-			analysis, ok := promptcontext.GetAnalysis(file)
+			analysis, ok := run.GetAnalysis(file)
 			if !ok {
-				writeJSON(w, http.StatusNotFound, errorResponse{Success: false, Error: struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				}{Code: "ANALYSIS_NOT_FOUND", Message: fmt.Sprintf("No analysis generated yet for %s", file)}})
+				writeError(w, http.StatusNotFound, "ANALYSIS_NOT_FOUND", fmt.Sprintf("No analysis generated yet for %s", file))
 				return
 			}
 			writeJSON(w, http.StatusOK, struct {
@@ -128,7 +134,7 @@ func StartGraphServer(addr string) {
 		writeJSON(w, http.StatusOK, struct {
 			Success bool                         `json:"success"`
 			Data    []promptcontext.FileAnalysis `json:"data"`
-		}{Success: true, Data: promptcontext.AllAnalyses()})
+		}{Success: true, Data: run.AllAnalyses()})
 	})
 
 	mux.HandleFunc("/api/prompt", func(w http.ResponseWriter, r *http.Request) {
@@ -145,62 +151,38 @@ func StartGraphServer(addr string) {
 		}
 
 		if file != "" {
-			ctx, ok := promptcontext.GetPromptContext(file)
+			ctx, ok := run.GetPromptContext(file)
 			if !ok {
-				writeJSON(w, http.StatusNotFound, errorResponse{Success: false, Error: struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				}{Code: "CONFLICT_NOT_FOUND", Message: fmt.Sprintf("No prompt context generated yet for %s", file)}})
+				writeError(w, http.StatusNotFound, "CONFLICT_NOT_FOUND", fmt.Sprintf("No prompt context generated yet for %s", file))
 				return
 			}
 			writeJSON(w, http.StatusOK, promptResponse{Success: true, Data: ctx})
 			return
 		}
 
-		writeJSON(w, http.StatusOK, promptListResponse{Success: true, Data: promptcontext.AllPromptContexts()})
+		writeJSON(w, http.StatusOK, promptListResponse{Success: true, Data: run.AllPromptContexts()})
 	})
-
-	// /api/prompt/statistics has been removed: token statistics are not tracked in this build.
 
 	mux.HandleFunc("/api/suggestions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		file := r.URL.Query().Get("file")
 
-		items, err := generateSuggestions(file)
+		items, err := generateSuggestions(run, file)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Success: false, Error: struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}{Code: "SUGGESTION_ERROR", Message: err.Error()}})
+			writeError(w, http.StatusInternalServerError, "SUGGESTION_ERROR", err.Error())
 			return
 		}
 
 		writeJSON(w, http.StatusOK, suggestionsResponse{Success: true, Data: items})
 	})
 
-	mux.HandleFunc("/api/graph/expand", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		writeJSON(w, http.StatusNotImplemented, errorResponse{Success: false, Error: struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}{Code: "NOT_IMPLEMENTED", Message: "Graph expansion is not implemented yet."}})
-	})
-
-	mux.HandleFunc("/api/graph/collapse", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		writeJSON(w, http.StatusNotImplemented, errorResponse{Success: false, Error: struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}{Code: "NOT_IMPLEMENTED", Message: "Graph collapse is not implemented yet."}})
-	})
-
-	mux.HandleFunc("/api/graph/focus", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		writeJSON(w, http.StatusNotImplemented, errorResponse{Success: false, Error: struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}{Code: "NOT_IMPLEMENTED", Message: "Graph focus is not implemented yet."}})
-	})
+	for _, path := range []string{"/api/graph/expand", "/api/graph/collapse", "/api/graph/focus"} {
+		name := strings.TrimPrefix(path, "/api/graph/")
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", fmt.Sprintf("Graph %s is not implemented yet.", name))
+		})
+	}
 
 	fmt.Printf("listening on http://localhost%s\n", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -208,14 +190,14 @@ func StartGraphServer(addr string) {
 	}
 }
 
-func generateSuggestions(file string) ([]SuggestionItem, error) {
+func generateSuggestions(run *runstate.Run, file string) ([]SuggestionItem, error) {
 	suggestionMu.Lock()
 	defer suggestionMu.Unlock()
 	if items, ok := suggestionCache[file]; ok && len(items) > 0 {
 		return items, nil
 	}
 
-	analyses := promptcontext.AllAnalyses()
+	analyses := run.AllAnalyses()
 	if len(analyses) == 0 {
 		return nil, fmt.Errorf("no analysis available to generate suggestions")
 	}

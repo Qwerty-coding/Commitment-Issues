@@ -2,13 +2,13 @@ package graph
 
 import (
 	"fmt"
+	"sort"
 	"strings"
-	"sync"
 
 	semantic "CommitIssues/internal/semantic"
 )
 
-// ─── Cytoscape JSON structs (UPDATED FOR COMPOUND NODES) ──────────────
+// ─── Cytoscape JSON structs (compound nodes) ──────────────────────────────
 
 type CyNodeData struct {
 	ID        string `json:"id"`
@@ -51,13 +51,25 @@ type GraphDTO struct {
 	Edges []CyEdge `json:"edges"`
 }
 
+// BuildCyGraph builds a deterministic, duplicate-free Cytoscape graph for a
+// single conflicted file. Node and edge order is stable regardless of map
+// iteration order, so repeated scans produce identical output.
 func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs ...semantic.SemanticGraph) CyGraph {
 	nodes := []CyNode{}
 	edges := []CyEdge{}
 	nodeIDByKey := make(map[string]string)
+	seenNodeIDs := make(map[string]struct{})
 
 	rootID := "file__" + sanitizeID(fileName)
-	nodes = append(nodes, CyNode{Data: CyNodeData{
+	appendNode := func(node CyNode) {
+		if _, exists := seenNodeIDs[node.Data.ID]; exists {
+			return
+		}
+		seenNodeIDs[node.Data.ID] = struct{}{}
+		nodes = append(nodes, node)
+	}
+
+	appendNode(CyNode{Data: CyNodeData{
 		ID:     rootID,
 		Label:  fileName,
 		Status: "file",
@@ -76,15 +88,13 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 	statusMap := map[string]elemMeta{}
 
 	for _, item := range diff.Collisions {
-		k := item.Kind + ":" + item.Name
-		statusMap[k] = elemMeta{
+		statusMap[diffKey(item)] = elemMeta{
 			kind: item.Kind, name: item.Name, line: item.Line, status: "collision",
 			baseCode: item.BaseContent, ourCode: item.OurContent, theirCode: item.TheirContent,
 		}
 	}
-
 	for _, item := range diff.OurChanges {
-		k := item.Kind + ":" + item.Name
+		k := diffKey(item)
 		if _, exists := statusMap[k]; !exists {
 			statusMap[k] = elemMeta{
 				kind: item.Kind, name: item.Name, line: item.Line, status: strings.ToLower(item.Type),
@@ -92,9 +102,8 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 			}
 		}
 	}
-
 	for _, item := range diff.TheirChanges {
-		k := item.Kind + ":" + item.Name
+		k := diffKey(item)
 		if _, exists := statusMap[k]; !exists {
 			statusMap[k] = elemMeta{
 				kind: item.Kind, name: item.Name, line: item.Line, status: strings.ToLower(item.Type),
@@ -103,10 +112,17 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 		}
 	}
 
-	for key, meta := range statusMap {
+	keys := make([]string, 0, len(statusMap))
+	for key := range statusMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		meta := statusMap[key]
 		nodeID := sanitizeID(rootID + "__" + key)
 		nodeIDByKey[key] = nodeID
-		nodes = append(nodes, CyNode{Data: CyNodeData{
+		appendNode(CyNode{Data: CyNodeData{
 			ID:        nodeID,
 			Parent:    rootID,
 			Label:     fmt.Sprintf("%s: %s (L%d)", meta.kind, meta.name, meta.line),
@@ -122,12 +138,16 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 	if len(semanticGraphs) > 0 {
 		semanticToCyID := make(map[string]string)
 		for _, node := range semanticGraphs[0].Nodes {
-			key := strings.ToLower(node.Kind) + ":" + node.Name
+			key := node.Identity
+			if key == "" {
+				key = strings.ToLower(node.Kind) + ":" + node.Name
+			}
 			if cyID, ok := nodeIDByKey[key]; ok {
 				semanticToCyID[node.ID] = cyID
 			}
 		}
 
+		seenEdgeIDs := make(map[string]struct{})
 		for _, edge := range semanticGraphs[0].Edges {
 			if edge.Type != "CALLS" {
 				continue
@@ -140,8 +160,13 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 			if !ok {
 				continue
 			}
+			edgeID := sanitizeID(edge.ID)
+			if _, exists := seenEdgeIDs[edgeID]; exists {
+				continue
+			}
+			seenEdgeIDs[edgeID] = struct{}{}
 			edges = append(edges, CyEdge{Data: CyEdgeData{
-				ID:     sanitizeID(edge.ID),
+				ID:     edgeID,
 				Source: sourceNodeID,
 				Target: targetNodeID,
 				Type:   edge.Type,
@@ -149,7 +174,49 @@ func BuildCyGraph(fileName string, diff semantic.SmartDiffResult, semanticGraphs
 		}
 	}
 
+	sort.Slice(edges, func(i, j int) bool { return edges[i].Data.ID < edges[j].Data.ID })
+
 	return CyGraph{Elements: CyElements{Nodes: nodes, Edges: edges}}
+}
+
+// MergeGraphs merges multiple per-file graphs into one deterministic graph,
+// deduplicating nodes and edges by ID and sorting the output.
+func MergeGraphs(graphs []CyGraph) CyGraph {
+	merged := CyGraph{Elements: CyElements{Nodes: []CyNode{}, Edges: []CyEdge{}}}
+
+	seenNodes := make(map[string]struct{})
+	seenEdges := make(map[string]struct{})
+	for _, g := range graphs {
+		for _, node := range g.Elements.Nodes {
+			if _, exists := seenNodes[node.Data.ID]; exists {
+				continue
+			}
+			seenNodes[node.Data.ID] = struct{}{}
+			merged.Elements.Nodes = append(merged.Elements.Nodes, node)
+		}
+		for _, edge := range g.Elements.Edges {
+			if _, exists := seenEdges[edge.Data.ID]; exists {
+				continue
+			}
+			seenEdges[edge.Data.ID] = struct{}{}
+			merged.Elements.Edges = append(merged.Elements.Edges, edge)
+		}
+	}
+
+	sort.Slice(merged.Elements.Nodes, func(i, j int) bool {
+		return merged.Elements.Nodes[i].Data.ID < merged.Elements.Nodes[j].Data.ID
+	})
+	sort.Slice(merged.Elements.Edges, func(i, j int) bool {
+		return merged.Elements.Edges[i].Data.ID < merged.Elements.Edges[j].Data.ID
+	})
+	return merged
+}
+
+func diffKey(item semantic.DiffItem) string {
+	if item.Identity != "" {
+		return item.Identity
+	}
+	return strings.ToLower(item.Kind) + ":" + item.Name
 }
 
 func sanitizeID(s string) string {
@@ -157,36 +224,10 @@ func sanitizeID(s string) string {
 	return r.Replace(s)
 }
 
-var (
-	graphStoreMu sync.Mutex
-	graphStore   []CyGraph
-)
-
-func RegisterGraph(g CyGraph) {
-	graphStoreMu.Lock()
-	defer graphStoreMu.Unlock()
-	graphStore = append(graphStore, g)
-}
-
-func MergedGraph() CyGraph {
-	graphStoreMu.Lock()
-	defer graphStoreMu.Unlock()
-
-	merged := CyGraph{Elements: CyElements{Nodes: []CyNode{}, Edges: []CyEdge{}}}
-	for _, g := range graphStore {
-		merged.Elements.Nodes = append(merged.Elements.Nodes, g.Elements.Nodes...)
-		merged.Elements.Edges = append(merged.Elements.Edges, g.Elements.Edges...)
-	}
-	return merged
-}
-
+// ToDTO converts a Cytoscape graph into the flat DTO shape the API returns.
 func (g CyGraph) ToDTO() GraphDTO {
 	return GraphDTO{
 		Nodes: g.Elements.Nodes,
 		Edges: g.Elements.Edges,
 	}
-}
-
-func MergedGraphDTO() GraphDTO {
-	return MergedGraph().ToDTO()
 }

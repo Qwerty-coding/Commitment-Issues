@@ -3,43 +3,63 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	ai "CommitIssues/internal/ai"
-	"CommitIssues/internal/cache"
 	promptcontext "CommitIssues/internal/context"
 	git "CommitIssues/internal/git"
 	graph "CommitIssues/internal/graph"
 	parser "CommitIssues/internal/parser"
 	prompt "CommitIssues/internal/prompt"
 	report "CommitIssues/internal/report"
+	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-type Config struct {
-	MaxConcurrency      int
-	ConfidenceThreshold int
-	APIKey              string
-	Provider            string
-	Model               string
-	BaseURL             string
-}
-
+// FileOutcome is the result of processing a single conflicted file. Errors are
+// always structured (see *FileError) so a single bad file cannot terminate the
+// whole run.
 type FileOutcome struct {
+	File       string
 	Output     string
 	ReportPath string
 	Err        error
 }
 
+// RunResult summarizes one repository processing pass.
+type RunResult struct {
+	RunID      string
+	Repository string
+	Duration   time.Duration
+	// Outcomes preserves deterministic file order.
+	Outcomes  []FileOutcome
+	Succeeded []FileOutcome
+	Failed    []FileOutcome
+}
+
+// Summary renders a deterministic, human-readable run summary.
+func (r *RunResult) Summary() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "run %s: %d file(s) processed (%d succeeded, %d failed) in %s\n",
+		r.RunID, len(r.Outcomes), len(r.Succeeded), len(r.Failed), formatDuration(r.Duration))
+	for _, failed := range r.Failed {
+		fmt.Fprintf(&b, "  - failed: %v\n", failed.Err)
+	}
+	return b.String()
+}
+
 var debugLoggingEnabled bool
 
+// EnableDebugLogging toggles verbose pipeline logging.
 func EnableDebugLogging(enabled bool) {
 	debugLoggingEnabled = enabled
 }
@@ -51,6 +71,7 @@ func debugPrintf(format string, args ...interface{}) {
 	fmt.Printf(format, args...)
 }
 
+// ResolveScanRoot resolves a user-supplied path to a scan root directory.
 func ResolveScanRoot(argPath string) string {
 	if argPath != "" {
 		if filepath.IsAbs(argPath) {
@@ -80,9 +101,10 @@ func ResolveScanRoot(argPath string) string {
 	return cwd
 }
 
-// FindConflicts returns map of repoRoot -> conflictedFiles
-func FindConflicts(scanRoot string) (map[string][]string, []string, error) {
-	repoRoots, err := git.FindGitRepositoryRoots(scanRoot)
+// FindConflicts returns a map of repoRoot -> conflicted files plus the
+// deterministically sorted repository roots.
+func FindConflicts(ctx context.Context, scanRoot string) (map[string][]string, []string, error) {
+	repoRoots, err := git.FindGitRepositoryRoots(ctx, scanRoot)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -94,14 +116,17 @@ func FindConflicts(scanRoot string) (map[string][]string, []string, error) {
 
 	conflictsByRepo := make(map[string][]string)
 	for _, repoRoot := range repoRoots {
-		conflictedFiles, err := git.GetConflictedFiles(repoRoot)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		conflictedFiles, err := git.GetConflictedFiles(ctx, repoRoot)
 		if err == nil && len(conflictedFiles) > 0 {
-			absRepoRoot, err := filepath.Abs(repoRoot)
-			if err != nil {
+			absRepoRoot, absErr := filepath.Abs(repoRoot)
+			if absErr != nil {
 				absRepoRoot = repoRoot
 			}
 
-			// If scanRoot is a subdirectory of repoRoot, filter files
+			// If scanRoot is a subdirectory of repoRoot, filter files.
 			relScan, relErr := filepath.Rel(absRepoRoot, absScanRoot)
 			if relErr == nil && relScan != "." && !strings.HasPrefix(relScan, "..") {
 				var filtered []string
@@ -116,14 +141,16 @@ func FindConflicts(scanRoot string) (map[string][]string, []string, error) {
 			}
 
 			if len(conflictedFiles) > 0 {
+				sort.Strings(conflictedFiles)
 				conflictsByRepo[repoRoot] = conflictedFiles
 			}
 		}
 	}
+
+	sort.Strings(repoRoots)
 	return conflictsByRepo, repoRoots, nil
 }
 
-// ProcessRepository conflicts concurrently
 func formatDuration(d time.Duration) string {
 	if d < time.Second {
 		return fmt.Sprintf("%dms", d/time.Millisecond)
@@ -136,103 +163,172 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm%ds", minutes, seconds)
 }
 
-func ProcessRepository(repoRoot string, conflictedFiles []string, cfg Config, runAI bool) []FileOutcome {
-	start := time.Now()
-	debugPrintf("[resolve] repo %s: starting %d file(s) in parallel (max concurrency=%d)\n", repoRoot, len(conflictedFiles), cfg.MaxConcurrency)
+// ProcessRepository analyzes every conflicted file in a repository using a
+// bounded, cancellation-aware worker pool.
+//
+// A single file failure is collected as a structured per-file error and never
+// terminates the run. Terminal errors are returned only for invalid
+// configuration, fatal initialization failure, cancellation or timeout.
+func ProcessRepository(ctx context.Context, run *runstate.Run, repoRoot string, conflictedFiles []string, cfg Config, runAI bool) (*RunResult, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
-	outcomes := make([]FileOutcome, len(conflictedFiles))
+	files := append([]string(nil), conflictedFiles...)
+	sort.Strings(files)
+
+	result := &RunResult{RunID: runID(run), Repository: repoRoot}
+	outcomes := make([]FileOutcome, len(files))
+	for i, file := range files {
+		outcomes[i] = FileOutcome{File: file}
+	}
+
+	start := time.Now()
+	debugPrintf("[analyze] repo %s: starting %d file(s) in parallel (max concurrency=%d)\n", repoRoot, len(files), cfg.MaxConcurrency)
+
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, cfg.MaxConcurrency)
 
-	for i, targetFile := range conflictedFiles {
+	for i, file := range files {
 		wg.Add(1)
-		go func(idx int, file string) {
+		go func(idx int, target string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			// Inform user immediately that processing for this file has started.
-			fmt.Printf("Processing %s...\n", file)
-			debugPrintf("[resolve] repo %s: starting file %s\n", repoRoot, file)
-			outcomes[idx] = ProcessConflictFile(repoRoot, file, cfg, runAI)
-			// Stream the file's output as soon as it's ready so users see progress.
-			if outcomes[idx].Output != "" {
-				fmt.Print(outcomes[idx].Output)
+
+			// Acquire the semaphore, but abandon immediately on cancellation
+			// so no new work is scheduled and no worker blocks forever.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				outcomes[idx] = FileOutcome{File: target, Err: ctx.Err()}
+				return
 			}
-			debugPrintf("[resolve] repo %s: completed file %s\n", repoRoot, file)
-		}(i, targetFile)
+			defer func() { <-sem }()
+
+			outcomes[idx] = ProcessConflictFile(ctx, run, repoRoot, target, cfg, runAI)
+		}(i, file)
 	}
 	wg.Wait()
-	debugPrintf("[resolve] repo %s: finished all files in %s\n", repoRoot, formatDuration(time.Since(start)))
-	return outcomes
+	result.Duration = time.Since(start)
+
+	result.Outcomes = outcomes
+	for _, outcome := range outcomes {
+		if outcome.Err != nil {
+			result.Failed = append(result.Failed, outcome)
+		} else {
+			result.Succeeded = append(result.Succeeded, outcome)
+		}
+	}
+
+	debugPrintf("[analyze] repo %s: finished in %s\n", repoRoot, formatDuration(result.Duration))
+
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
-// ProcessConflictFile runs AST extraction, Semantic Diff, Graphing, & optionally AI
-func ProcessConflictFile(repoRoot, targetFile string, cfg Config, runAI bool) FileOutcome {
+// ProcessConflictFile runs AST extraction, semantic diff, graphing and
+// optionally AI resolution for a single conflicted file.
+func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targetFile string, cfg Config, runAI bool) FileOutcome {
 	start := time.Now()
-	debugPrintf("[resolve] file %s: starting processing\n", targetFile)
+	debugPrintf("[analyze] file %s: starting processing\n", targetFile)
 
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "\n--- Conflict: %s ---\n", targetFile)
 
-	conflictData, err := git.ExtractConflictVersions(repoRoot, targetFile)
-	if err != nil {
-		debugPrintf("[resolve] file %s: failed to extract versions in %s: %v\n", targetFile, formatDuration(time.Since(start)), err)
-		return FileOutcome{Output: buf.String(), Err: fmt.Errorf("failed to extract versions: %w", err)}
+	if err := ctx.Err(); err != nil {
+		return FileOutcome{File: targetFile, Output: buf.String(), Err: err}
 	}
-	debugPrintf("[resolve] file %s: extracted versions in %s\n", targetFile, formatDuration(time.Since(start)))
-	fmt.Fprintln(&buf, "Successfully extracted Base, Ours, and Theirs code from Git index.")
+
+	conflictData, err := git.ExtractConflictVersions(ctx, repoRoot, targetFile)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return FileOutcome{File: targetFile, Output: buf.String(), Err: ctxErr}
+		}
+		code := CodeFileExtract
+		var missingStage *git.MissingStageError
+		if errors.As(err, &missingStage) {
+			code = CodeGitStage
+		}
+		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: code, Err: err}}
+	}
+	debugPrintf("[analyze] file %s: extracted versions in %s (source=%s, regions=%d)\n",
+		targetFile, formatDuration(time.Since(start)), conflictData.Source, len(conflictData.Regions))
+	fmt.Fprintln(&buf, "Successfully extracted Base, Ours, and Theirs code.")
 
 	jsParser := sitter.NewParser()
 	jsParser.SetLanguage(parser.GetLanguageForFile(targetFile))
-	debugPrintf("[resolve] file %s: using parser for extension %q\n", targetFile, filepath.Ext(targetFile))
 
-	ourSourceCode := parser.NormalizeUTF8([]byte(conflictData.OurVersion))
-	ourTree, _ := jsParser.ParseCtx(context.Background(), nil, ourSourceCode)
-	if ourTree == nil {
-		debugPrintf("[resolve] file %s: failed to parse OUR version in %s\n", targetFile, formatDuration(time.Since(start)))
-		return FileOutcome{Output: buf.String(), Err: fmt.Errorf("failed to parse OUR version into AST")}
+	parseSide := func(label string, raw string) (*sitter.Tree, []byte, error) {
+		source := parser.NormalizeUTF8([]byte(raw))
+		tree, parseErr := jsParser.ParseCtx(ctx, nil, source)
+		if parseErr != nil {
+			return nil, source, parseErr
+		}
+		if tree == nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, source, ctxErr
+			}
+			return nil, source, fmt.Errorf("failed to parse %s version into AST", label)
+		}
+		return tree, source, nil
 	}
 
-	theirSourceCode := parser.NormalizeUTF8([]byte(conflictData.TheirVersion))
-	theirTree, _ := jsParser.ParseCtx(context.Background(), nil, theirSourceCode)
-	if theirTree == nil {
-		debugPrintf("[resolve] file %s: failed to parse THEIR version in %s\n", targetFile, formatDuration(time.Since(start)))
-		return FileOutcome{Output: buf.String(), Err: fmt.Errorf("failed to parse THEIR version into AST")}
+	ourTree, ourSourceCode, err := parseSide("OUR", conflictData.OurVersion)
+	if err != nil {
+		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
 	}
-
-	baseSourceCode := parser.NormalizeUTF8([]byte(conflictData.BaseVersion))
-	baseTree, _ := jsParser.ParseCtx(context.Background(), nil, baseSourceCode)
-	debugPrintf("[resolve] file %s: parsed ASTs in %s\n", targetFile, formatDuration(time.Since(start)))
+	theirTree, theirSourceCode, err := parseSide("THEIR", conflictData.TheirVersion)
+	if err != nil {
+		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
+	}
+	baseTree, baseSourceCode, err := parseSide("BASE", conflictData.BaseVersion)
+	if err != nil {
+		// A missing/failed base version is not fatal: base may legitimately be
+		// empty for add/add style conflicts.
+		debugPrintf("[analyze] file %s: base parse skipped: %v\n", targetFile, err)
+		baseTree = nil
+	}
+	debugPrintf("[analyze] file %s: parsed ASTs in %s\n", targetFile, formatDuration(time.Since(start)))
 
 	baseASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
 	if baseTree != nil {
-		parser.ExtractData(baseTree.RootNode(), baseSourceCode, &baseASTData)
+		parser.ExtractDataForFile(baseTree.RootNode(), baseSourceCode, targetFile, &baseASTData)
 	}
 
 	ourASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
-	parser.ExtractData(ourTree.RootNode(), ourSourceCode, &ourASTData)
+	parser.ExtractDataForFile(ourTree.RootNode(), ourSourceCode, targetFile, &ourASTData)
 	report.PrintASTContext(&buf, "OUR", ourASTData)
 
 	theirASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
-	parser.ExtractData(theirTree.RootNode(), theirSourceCode, &theirASTData)
+	parser.ExtractDataForFile(theirTree.RootNode(), theirSourceCode, targetFile, &theirASTData)
 	report.PrintASTContext(&buf, "THEIR", theirASTData)
 
-	smartDiff := semantic.GenerateSmartDiff(baseASTData, ourASTData, theirASTData)
-	debugPrintf("[resolve] file %s: generated smart diff in %s (collisions=%d, ours=%d, theirs=%d)\n", targetFile, formatDuration(time.Since(start)), len(smartDiff.Collisions), len(smartDiff.OurChanges), len(smartDiff.TheirChanges))
+	smartDiff, err := semantic.GenerateSmartDiffContext(ctx, baseASTData, ourASTData, theirASTData)
+	if err != nil {
+		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeInternal, Err: err}}
+	}
+	debugPrintf("[analyze] file %s: generated smart diff in %s (collisions=%d, ours=%d, theirs=%d)\n",
+		targetFile, formatDuration(time.Since(start)), len(smartDiff.Collisions), len(smartDiff.OurChanges), len(smartDiff.TheirChanges))
+
 	ourSemanticGraph := semantic.BuildSemanticGraph(ourASTData)
 	theirSemanticGraph := semantic.BuildSemanticGraph(theirASTData)
 	mergedSemanticGraph := semantic.MergeSemanticGraphs(ourSemanticGraph, theirSemanticGraph)
 	conflictScope := semantic.ComputeConflictScope(mergedSemanticGraph, smartDiff.Collisions)
-	promptContext := promptcontext.BuildPromptContext(
+
+	promptCtx := promptcontext.BuildPromptContext(
 		fmt.Sprintf("Repository root: %s", repoRoot),
 		[]string{conflictData.FileName},
 		conflictScope,
 		ourASTData,
 		theirASTData,
 	)
-	promptcontext.RegisterPromptContext(conflictData.FileName, promptContext)
-	graph.RegisterGraph(graph.BuildCyGraph(conflictData.FileName, smartDiff, conflictScope))
-	report.PrintDiffReport(&buf, smartDiff)
 
 	payload := prompt.AIRequestPayload{
 		FileName:     conflictData.FileName,
@@ -250,78 +346,101 @@ func ProcessConflictFile(repoRoot, targetFile string, cfg Config, runAI bool) Fi
 		report.PrintPayloadJSON(&buf, payload, jsonBytes)
 	}
 
-	var reportPath string
-	// Register analysis (without storing token statistics) so API can read contextual info
-	promptcontext.RegisterAnalysis(promptcontext.FileAnalysis{
-		File:              conflictData.FileName,
-		RepositorySummary: fmt.Sprintf("Repository root: %s", repoRoot),
-		PromptContext:     promptContext,
-		BaseAST:           baseASTData,
-		OurAST:            ourASTData,
-		TheirAST:          theirASTData,
-		SmartDiff:         smartDiff,
-	})
+	// Register run-scoped state only once every deterministic input is computed.
+	if run != nil {
+		run.RegisterPromptContext(conflictData.FileName, promptCtx)
+		run.RegisterGraph(conflictData.FileName, graph.BuildCyGraph(conflictData.FileName, smartDiff, conflictScope))
+		run.RegisterAnalysis(promptcontext.FileAnalysis{
+			File:              conflictData.FileName,
+			RepositorySummary: fmt.Sprintf("Repository root: %s", repoRoot),
+			PromptContext:     promptCtx,
+			BaseAST:           baseASTData,
+			OurAST:            ourASTData,
+			TheirAST:          theirASTData,
+			SmartDiff:         smartDiff,
+		})
+	}
 
-	if jsonBytes != nil {
-		// Store report JSON in in-memory cache rather than writing to disk.
-		cacheKey := cache.SaveReport(repoRoot, conflictData.FileName, jsonBytes)
-		if cacheKey == "" {
+	var reportPath string
+	if jsonBytes != nil && run != nil {
+		reportPath = run.SaveReport(repoRoot, conflictData.FileName, jsonBytes)
+		if reportPath == "" {
 			fmt.Fprintf(&buf, "Warning: failed to cache report for %s\n", conflictData.FileName)
-		} else {
-			reportPath = cacheKey
 		}
 	}
+
+	report.PrintDiffReport(&buf, smartDiff)
 
 	if runAI {
-		debugPrintf("[resolve] file %s: starting AI resolution for %d collision(s) via %s\n", targetFile, len(smartDiff.Collisions), cfg.Provider)
-		fmt.Fprintf(&buf, "\nInitializing AI Provider: %s...\n", cfg.Provider)
-
-		aiConfig := ai.AIConfig{
-			Provider: cfg.Provider,
-			Model:    cfg.Model,
-			APIKey:   cfg.APIKey,
-			BaseURL:  cfg.BaseURL,
-		}
-
-		resolver, err := ai.GetResolver(aiConfig)
-		if err != nil {
-			debugPrintf("[resolve] file %s: AI provider initialization failed in %s: %v\n", targetFile, formatDuration(time.Since(start)), err)
-			fmt.Fprintf(&buf, "Failed to initialize AI provider: %v\n", err)
-		} else {
-			ctx := context.Background()
-			for i, collision := range smartDiff.Collisions {
-				collisionStart := time.Now()
-				debugPrintf("[resolve] file %s: collision %d/%d [%s] %s (line %d) starting\n", targetFile, i+1, len(smartDiff.Collisions), collision.Kind, collision.Name, collision.Line)
-				fmt.Fprintf(&buf, "  -> Requesting AI resolution for [%s] %s (Line %d)...\n", collision.Kind, collision.Name, collision.Line)
-
-				res, aiErr := resolver.ResolveCollision(ctx, collision, promptContext)
-				if aiErr != nil {
-					debugPrintf("[resolve] file %s: collision %d/%d failed after %s: %v\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), aiErr)
-					fmt.Fprintf(&buf, "     ⚠ AI Error: %v\n", aiErr)
-					continue
-				}
-
-				debugPrintf("[resolve] file %s: collision %d/%d resolved in %s (confidence=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), res.Confidence)
-				fmt.Fprintf(&buf, "     ✓ Resolved (Confidence: %d%%)\n", res.Confidence)
-				fmt.Fprintf(&buf, "       Explanation: %s\n", res.Explanation)
-				fmt.Fprintf(&buf, "       Suggested Code:\n")
-
-				for _, line := range strings.Split(res.SuggestedCode, "\n") {
-					fmt.Fprintf(&buf, "         %s\n", line)
-				}
+		if err := runAIResolution(ctx, &buf, targetFile, smartDiff, promptCtx, cfg); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return FileOutcome{File: targetFile, Output: buf.String(), Err: ctxErr}
 			}
+			return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeInternal, Err: err}}
+		}
+
+		// After AI resolution, release the cached report to free memory.
+		if run != nil && reportPath != "" {
+			run.DeleteReport(repoRoot, conflictData.FileName)
+			reportPath = ""
+			debugPrintf("[analyze] file %s: deleted cached report for %s\n", targetFile, conflictData.FileName)
 		}
 	}
 
-	debugPrintf("[resolve] file %s: finished in %s\n", targetFile, formatDuration(time.Since(start)))
+	debugPrintf("[analyze] file %s: finished in %s\n", targetFile, formatDuration(time.Since(start)))
+	return FileOutcome{File: targetFile, Output: buf.String(), ReportPath: reportPath}
+}
 
-	// After AI resolution (if executed), remove the cached AST/report JSON to free memory.
-	if runAI && reportPath != "" {
-		cache.DeleteReport(repoRoot, conflictData.FileName)
-		// indicate that the report is no longer stored
-		reportPath = ""
-		debugPrintf("[resolve] file %s: deleted cached report for %s\n", targetFile, conflictData.FileName)
+// runAIResolution resolves each collision in order, honoring cancellation.
+func runAIResolution(ctx context.Context, buf *bytes.Buffer, targetFile string, smartDiff semantic.SmartDiffResult, promptCtx promptcontext.PromptContextIR, cfg Config) error {
+	debugPrintf("[analyze] file %s: starting AI resolution for %d collision(s) via %s\n", targetFile, len(smartDiff.Collisions), cfg.Provider)
+	fmt.Fprintf(buf, "\nInitializing AI Provider: %s...\n", cfg.Provider)
+
+	aiConfig := ai.AIConfig{
+		Provider: cfg.Provider,
+		Model:    cfg.Model,
+		APIKey:   cfg.APIKey,
+		BaseURL:  cfg.BaseURL,
 	}
 
-	return FileOutcome{Output: buf.String(), ReportPath: reportPath}
+	resolver, err := ai.GetResolver(aiConfig)
+	if err != nil {
+		debugPrintf("[analyze] file %s: AI provider initialization failed: %v\n", targetFile, err)
+		fmt.Fprintf(buf, "Failed to initialize AI provider: %v\n", err)
+		return nil
+	}
+
+	for i, collision := range smartDiff.Collisions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		collisionStart := time.Now()
+		fmt.Fprintf(buf, "  -> Requesting AI resolution for [%s] %s (Line %d)...\n", collision.Kind, collision.Name, collision.Line)
+
+		res, aiErr := resolver.ResolveCollision(ctx, collision, promptCtx)
+		if aiErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			debugPrintf("[analyze] file %s: collision %d/%d failed after %s: %v\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), aiErr)
+			fmt.Fprintf(buf, "     ⚠ AI Error: %v\n", aiErr)
+			continue
+		}
+
+		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (confidence=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), res.Confidence)
+		fmt.Fprintf(buf, "     ✓ Resolved (Confidence: %d%%)\n", res.Confidence)
+		fmt.Fprintf(buf, "       Explanation: %s\n", res.Explanation)
+		fmt.Fprintf(buf, "       Suggested Code:\n")
+		for _, line := range strings.Split(res.SuggestedCode, "\n") {
+			fmt.Fprintf(buf, "         %s\n", line)
+		}
+	}
+	return nil
+}
+
+func runID(run *runstate.Run) string {
+	if run == nil {
+		return ""
+	}
+	return run.ID
 }

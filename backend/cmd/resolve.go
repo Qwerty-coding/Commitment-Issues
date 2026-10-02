@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
 
 	"CommitIssues/internal/engine"
+	"CommitIssues/internal/runstate"
 
 	"github.com/spf13/cobra"
 )
@@ -30,12 +32,13 @@ var (
 	threshold   int
 	concurrency int
 	debug       bool
+	timeout     time.Duration
 )
 
 var resolveCmd = &cobra.Command{
 	Use:   "resolve [path]",
 	Short: "Analyze conflicts and use AI to resolve merge collisions",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		engine.EnableDebugLogging(debug)
 		start := time.Now()
 		if debug {
@@ -46,61 +49,71 @@ var resolveCmd = &cobra.Command{
 		if apiKey == "" {
 			apiKey = os.Getenv("AI_API_KEY")
 		}
-		if debug {
-			fmt.Printf("[resolve] using provider=%s model=%s threshold=%d concurrency=%d\n", provider, modelName, threshold, concurrency)
-		}
 
 		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}
-		if debug {
-			fmt.Printf("[resolve] scanning target: %s\n", targetPath)
-		}
-
-		scanRoot := engine.ResolveScanRoot(targetPath)
-		if debug {
-			fmt.Printf("[resolve] resolved scan root: %s\n", scanRoot)
-		}
-
-		conflictsByRepo, _, err := engine.FindConflicts(scanRoot)
-		if err != nil || len(conflictsByRepo) == 0 {
-			fmt.Println("No conflicts found to resolve.")
-			return
-		}
-
-		totalFiles := 0
-		for _, files := range conflictsByRepo {
-			totalFiles += len(files)
-		}
-		if debug {
-			fmt.Printf("[resolve] discovered %d repositories and %d conflicting files\n", len(conflictsByRepo), totalFiles)
-		}
 
 		cfg := engine.Config{
 			MaxConcurrency:      concurrency,
 			ConfidenceThreshold: threshold,
+			Timeout:             timeout,
 			APIKey:              apiKey,
 			Provider:            provider,
 			Model:               modelName,
 			BaseURL:             baseURL,
 		}
+		// Configuration is validated before any scanning begins so invalid
+		// settings can never start analysis or deadlock the semaphore.
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
 
-		for repoRoot, files := range conflictsByRepo {
-			if debug {
-				fmt.Printf("[resolve] processing repository %s (%d files)\n", repoRoot, len(files))
+		ctx, cancel := context.WithTimeout(cmd.Context(), cfg.Timeout)
+		defer cancel()
+
+		scanRoot := engine.ResolveScanRoot(targetPath)
+		if debug {
+			fmt.Printf("[resolve] resolved scan root: %s\n", scanRoot)
+			fmt.Printf("[resolve] using provider=%s model=%s threshold=%d concurrency=%d timeout=%s\n", provider, modelName, threshold, concurrency, cfg.Timeout)
+		}
+
+		conflictsByRepo, repoRoots, err := engine.FindConflicts(ctx, scanRoot)
+		if err != nil {
+			return err
+		}
+		if len(conflictsByRepo) == 0 {
+			fmt.Println("No conflicts found to resolve.")
+			return nil
+		}
+
+		run := runstate.NewRun()
+		failures := 0
+		for _, repoRoot := range repoRoots {
+			files := conflictsByRepo[repoRoot]
+			if len(files) == 0 {
+				continue
 			}
-			outcomes := engine.ProcessRepository(repoRoot, files, cfg, true)
-			for _, out := range outcomes {
-				fmt.Print(out.Output)
+			result, processErr := engine.ProcessRepository(ctx, run, repoRoot, files, cfg, true)
+			if result != nil {
+				for _, out := range result.Outcomes {
+					fmt.Print(out.Output)
+				}
+				fmt.Print(result.Summary())
+				failures += len(result.Failed)
 			}
-			if debug {
-				fmt.Printf("[resolve] finished repository %s in %s\n", repoRoot, formatDuration(time.Since(start)))
+			if processErr != nil {
+				return processErr
 			}
 		}
 		if debug {
 			fmt.Printf("[resolve] resolve command finished in %s\n", formatDuration(time.Since(start)))
 		}
+		if failures > 0 {
+			return fmt.Errorf("resolve completed with %d file(s) failing; see summary above", failures)
+		}
+		return nil
 	},
 }
 
@@ -112,6 +125,7 @@ func init() {
 
 	resolveCmd.Flags().IntVarP(&threshold, "threshold", "t", 70, "Confidence threshold percentage")
 	resolveCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 4, "Max concurrent files")
+	resolveCmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "Overall analysis timeout (must be > 0)")
 	resolveCmd.Flags().BoolVar(&debug, "debug", false, "Enable verbose resolve pipeline logging")
 	rootCmd.AddCommand(resolveCmd)
 }

@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,9 @@ type DiffItem struct {
 	BaseContent  string `json:"base_content,omitempty"`
 	OurContent   string `json:"our_content,omitempty"`
 	TheirContent string `json:"their_content,omitempty"`
+	// Identity is the precise symbol identity (file + scope + kind + name +
+	// signature) when available, falling back to kind:name.
+	Identity string `json:"identity,omitempty"`
 }
 
 type SmartDiffResult struct {
@@ -31,6 +35,9 @@ type SemanticNode struct {
 	Label string   `json:"label"`
 	Line  int      `json:"line,omitempty"`
 	Calls []string `json:"calls,omitempty"`
+	// Identity is the precise symbol key used to keep distinct symbols
+	// (overloads, methods in different classes, scoped symbols) separate.
+	Identity string `json:"identity,omitempty"`
 }
 
 type SemanticEdge struct {
@@ -47,13 +54,31 @@ type SemanticGraph struct {
 
 type ConflictScope = SemanticGraph
 
+// SymbolIdentity builds a deterministic identity for a code element from its
+// file, enclosing scope, kind, name and signature. When none of the richer
+// fields are present it degrades to the legacy "kind:name" key.
+func SymbolIdentity(el parser.CodeElement) string {
+	if el.File == "" && el.Scope == "" && el.Signature == "" {
+		return el.Kind + ":" + el.Name
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%s", el.File, el.Scope, el.Kind, el.Name, el.Signature)
+}
+
+// DiffKey returns the key used to match a diff item against graph nodes.
+func DiffKey(item DiffItem) string {
+	if item.Identity != "" {
+		return item.Identity
+	}
+	return strings.ToLower(item.Kind) + ":" + item.Name
+}
+
 func BuildSignatureMap(ctx parser.ASTContext) map[string]parser.CodeElement {
 	m := make(map[string]parser.CodeElement, len(ctx.Functions)+len(ctx.Variables))
 	for _, fn := range ctx.Functions {
-		m[fn.Kind+":"+fn.Name] = fn
+		m[SymbolIdentity(fn)] = fn
 	}
 	for _, v := range ctx.Variables {
-		m[v.Kind+":"+v.Name] = v
+		m[SymbolIdentity(v)] = v
 	}
 	return m
 }
@@ -77,10 +102,12 @@ func BuildDiffItem(status string, baseEl, sideEl parser.CodeElement, isOurs bool
 	if status == "DELETED" {
 		item.Kind, item.Name, item.Line = baseEl.Kind, baseEl.Name, baseEl.Line
 		item.BaseContent = baseEl.Content
+		item.Identity = SymbolIdentity(baseEl)
 		return item
 	}
 
 	item.Kind, item.Name, item.Line = sideEl.Kind, sideEl.Name, sideEl.Line
+	item.Identity = SymbolIdentity(sideEl)
 	if status == "UPDATED" {
 		item.BaseContent = baseEl.Content
 	}
@@ -90,6 +117,22 @@ func BuildDiffItem(status string, baseEl, sideEl parser.CodeElement, isOurs bool
 		item.TheirContent = sideEl.Content
 	}
 	return item
+}
+
+// GenerateSmartDiffContext is GenerateSmartDiff with cancellation support so
+// semantic analysis participates in context propagation.
+func GenerateSmartDiffContext(ctx context.Context, base, ours, theirs parser.ASTContext) (SmartDiffResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return SmartDiffResult{}, err
+	}
+	result := GenerateSmartDiff(base, ours, theirs)
+	if err := ctx.Err(); err != nil {
+		return SmartDiffResult{}, err
+	}
+	return result, nil
 }
 
 func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
@@ -124,6 +167,7 @@ func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
 			result.Collisions = append(result.Collisions, DiffItem{
 				Type: "COLLISION", Kind: ourEl.Kind, Name: ourEl.Name, Line: ourEl.Line,
 				BaseContent: baseEl.Content, OurContent: ourEl.Content, TheirContent: theirEl.Content,
+				Identity: sig,
 			})
 			continue
 		}
@@ -153,40 +197,51 @@ func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
 }
 
 func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
-	graph := SemanticGraph{Nodes: []SemanticNode{}, Edges: []SemanticEdge{}}
+	result := SemanticGraph{Nodes: []SemanticNode{}, Edges: []SemanticEdge{}}
 	nodeByKey := make(map[string]SemanticNode)
+	funcByName := make(map[string]SemanticNode)
 
 	for _, fn := range ctx.Functions {
 		node := SemanticNode{
-			ID:    semanticNodeID(fn.Kind, fn.Name),
-			Name:  fn.Name,
-			Kind:  fn.Kind,
-			Label: fn.Name,
-			Line:  fn.Line,
-			Calls: append([]string(nil), fn.Calls...),
+			ID:       semanticNodeIDFor(fn),
+			Name:     fn.Name,
+			Kind:     fn.Kind,
+			Label:    fn.Name,
+			Line:     fn.Line,
+			Calls:    append([]string(nil), fn.Calls...),
+			Identity: SymbolIdentity(fn),
 		}
-		graph.Nodes = append(graph.Nodes, node)
-		nodeByKey[semanticNodeKey(node.Kind, node.Name)] = node
+		result.Nodes = append(result.Nodes, node)
+		nodeByKey[node.Identity] = node
+		if node.Kind == "Function" {
+			nameKey := strings.ToLower(node.Name)
+			if existing, ok := funcByName[nameKey]; !ok || node.ID < existing.ID {
+				funcByName[nameKey] = node
+			}
+		}
 	}
 
 	for _, v := range ctx.Variables {
 		node := SemanticNode{
-			ID:    semanticNodeID(v.Kind, v.Name),
-			Name:  v.Name,
-			Kind:  v.Kind,
-			Label: v.Name,
-			Line:  v.Line,
+			ID:       semanticNodeIDFor(v),
+			Name:     v.Name,
+			Kind:     v.Kind,
+			Label:    v.Name,
+			Line:     v.Line,
+			Identity: SymbolIdentity(v),
 		}
-		graph.Nodes = append(graph.Nodes, node)
-		nodeByKey[semanticNodeKey(node.Kind, node.Name)] = node
+		result.Nodes = append(result.Nodes, node)
+		nodeByKey[node.Identity] = node
 	}
 
 	edgeSeen := make(map[string]struct{})
 	for _, fn := range ctx.Functions {
-		sourceID := semanticNodeID(fn.Kind, fn.Name)
+		if fn.Kind != "Function" {
+			continue
+		}
+		sourceID := semanticNodeIDFor(fn)
 		for _, callName := range fn.Calls {
-			targetKey := semanticNodeKey("Function", callName)
-			targetNode, ok := nodeByKey[targetKey]
+			targetNode, ok := funcByName[strings.ToLower(callName)]
 			if !ok {
 				continue
 			}
@@ -195,7 +250,7 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 				continue
 			}
 			edgeSeen[edgeID] = struct{}{}
-			graph.Edges = append(graph.Edges, SemanticEdge{
+			result.Edges = append(result.Edges, SemanticEdge{
 				ID:     edgeID,
 				Source: sourceID,
 				Target: targetNode.ID,
@@ -204,7 +259,7 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 		}
 	}
 
-	return graph
+	return result
 }
 
 func MergeSemanticGraphs(graphs ...SemanticGraph) SemanticGraph {
@@ -247,7 +302,13 @@ func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictSc
 	nodeByKey := make(map[string]SemanticNode, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		nodeByID[node.ID] = node
-		nodeByKey[semanticNodeKey(node.Kind, node.Name)] = node
+		if node.Identity != "" {
+			nodeByKey[node.Identity] = node
+		}
+		fallbackKey := semanticNodeKey(node.Kind, node.Name)
+		if _, exists := nodeByKey[fallbackKey]; !exists {
+			nodeByKey[fallbackKey] = node
+		}
 	}
 
 	outgoing := make(map[string][]SemanticEdge)
@@ -269,7 +330,11 @@ func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictSc
 		if !strings.EqualFold(collision.Kind, "Function") {
 			continue
 		}
-		if root, ok := nodeByKey[semanticNodeKey("Function", collision.Name)]; ok {
+		root, ok := nodeByKey[DiffKey(collision)]
+		if !ok {
+			root, ok = nodeByKey[semanticNodeKey("Function", collision.Name)]
+		}
+		if ok {
 			if _, seen := visited[root.ID]; !seen {
 				visited[root.ID] = struct{}{}
 				queue = append(queue, root.ID)
@@ -314,6 +379,10 @@ func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictSc
 		edges = append(edges, edge)
 	}
 
+	// Deterministic ordering regardless of map iteration order.
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+
 	return ConflictScope{Nodes: nodes, Edges: edges}
 }
 
@@ -323,4 +392,15 @@ func semanticNodeKey(kind, name string) string {
 
 func semanticNodeID(kind, name string) string {
 	return strings.ToLower(kind) + "__" + strings.NewReplacer("/", "_", "\\", "_", ":", "_", ".", "_", " ", "_").Replace(name)
+}
+
+// semanticNodeIDFor builds a graph node ID from an element's full identity so
+// that duplicate names in different files/scopes/signatures stay distinct,
+// while degrading to the legacy ID when no richer metadata is present.
+func semanticNodeIDFor(el parser.CodeElement) string {
+	if el.File == "" && el.Scope == "" && el.Signature == "" {
+		return semanticNodeID(el.Kind, el.Name)
+	}
+	composite := strings.Join([]string{el.File, el.Scope, el.Name, el.Signature}, "__")
+	return semanticNodeID(el.Kind, composite)
 }

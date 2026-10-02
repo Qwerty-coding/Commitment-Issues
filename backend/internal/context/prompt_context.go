@@ -33,7 +33,7 @@ func BuildPromptContext(repositorySummary string, files []string, scope semantic
 			continue
 		}
 
-		key := semanticNodeKey(node.Kind, node.Name)
+		key := node.Identity
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -78,10 +78,10 @@ func EstimateTokens(text string) int {
 func buildCodeElementIndex(ctx parser.ASTContext) map[string]parser.CodeElement {
 	index := make(map[string]parser.CodeElement, len(ctx.Functions)+len(ctx.Variables))
 	for _, fn := range ctx.Functions {
-		index[semanticNodeKey(fn.Kind, fn.Name)] = fn
+		index[semantic.SymbolIdentity(fn)] = fn
 	}
 	for _, variable := range ctx.Variables {
-		index[semanticNodeKey(variable.Kind, variable.Name)] = variable
+		index[semantic.SymbolIdentity(variable)] = variable
 	}
 	return index
 }
@@ -142,8 +142,4 @@ func uniqueStrings(values []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
-}
-
-func semanticNodeKey(kind, name string) string {
-	return strings.ToLower(kind) + ":" + name
 }
