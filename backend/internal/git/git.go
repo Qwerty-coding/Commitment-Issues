@@ -164,11 +164,16 @@ func FindGitRepositoryRoots(ctx context.Context, rootDir string) ([]string, erro
 		return nil, err
 	}
 
-	if info, statErr := os.Stat(filepath.Join(rootDir, ".git")); statErr == nil && info.IsDir() {
+	// Check whether rootDir itself is a repository root. We already checked
+	// the context above, so a stat permission/error here is a real discovery
+	// failure and must be surfaced.
+	if info, err := os.Stat(filepath.Join(rootDir, ".git")); err == nil && info.IsDir() {
 		if _, exists := seen[rootDir]; !exists {
 			seen[rootDir] = struct{}{}
 			repoRoots = append([]string{rootDir}, repoRoots...)
 		}
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to stat git directory %s while searching for repository roots: %w", filepath.Join(rootDir, ".git"), err)
 	}
 
 	if len(repoRoots) == 0 {
@@ -176,11 +181,15 @@ func FindGitRepositoryRoots(ctx context.Context, rootDir string) ([]string, erro
 		if abs, absErr := filepath.Abs(rootDir); absErr == nil {
 			curr = abs
 		}
+		// Walk up the directory tree looking for a repository root. Permission or
+		// filesystem failures here are real discovery problems.
 		for {
 			gitDir := filepath.Join(curr, ".git")
 			if info, statErr := os.Stat(gitDir); statErr == nil && info.IsDir() {
 				repoRoots = append(repoRoots, curr)
 				break
+			} else if statErr != nil {
+				return nil, fmt.Errorf("failed to stat git directory %s while searching for repository roots: %w", gitDir, statErr)
 			}
 			parent := filepath.Dir(curr)
 			if parent == curr {

@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
@@ -29,9 +30,9 @@ func TestGenerateSmartDiff_RepeatedRunsAreIdentical(t *testing.T) {
 	ours := manySymbolContext("ours")
 	theirs := manySymbolContext("theirs")
 
-	first := GenerateSmartDiff(base, ours, theirs)
+	first := GenerateSmartDiff(context.Background(), base, ours, theirs)
 	for i := 0; i < 25; i++ {
-		if got := GenerateSmartDiff(base, ours, theirs); !reflect.DeepEqual(first, got) {
+		if got := GenerateSmartDiff(context.Background(), base, ours, theirs); !reflect.DeepEqual(first, got) {
 			t.Fatalf("run %d produced different output; map iteration order leaked into results", i)
 		}
 	}

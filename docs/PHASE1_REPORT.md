@@ -264,3 +264,22 @@ Two pre-existing expectations in `internal/semantic/semantic_test.go` were
 updated (not deleted) to match the new required behavior: variable collisions
 now seed the conflict scope, and change ordering is by identity rather than by
 status.
+
+### Additional fixes applied in finalization pass
+
+The following issues identified in the final review were also fixed:
+
+1. **`FindGitRepositoryRoots` filesystem error propagation**: `os.Stat` errors
+   when checking `.git` directories are now propagated rather than silently
+   treated as "not a repository".
+2. **Context checks inside semantic processing**: `GenerateSmartDiff` now
+   accepts a `context.Context` and checks for cancellation during map-building
+   and sorting operations, not just before and after.
+3. **Correct identity-only scope matching**: `ComputeConflictScope` now only uses
+   the legacy `kind:name` fallback when the collision itself lacks a precise
+   identity. When a collision has an identity, only that precise identity is
+   matched.
+4. **Repository-qualified API lookup documentation**: API handlers now document
+   that `FindAnalysis`/`FindPromptContext` return the first deterministic match
+   when multiple repositories contain the same file — run-state storage is fully
+   isolated, but the public lookup can return any matching repository's data.

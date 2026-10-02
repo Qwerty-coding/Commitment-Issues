@@ -95,6 +95,9 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		if file != "" {
 			analysis, ok := run.FindAnalysis(file)
 			if !ok {
+				// Note: for multi-repository runs, a bare file name may match more
+				// than one repository. Choose the first deterministic match for
+				// backward compatibility with the frontend's file-only queries.
 				writeError(w, http.StatusNotFound, "ANALYSIS_NOT_FOUND", fmt.Sprintf("No analysis generated yet for %s", file))
 				return
 			}
@@ -126,6 +129,9 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		if file != "" {
 			ctx, ok := run.FindPromptContext(file)
 			if !ok {
+				// Note: for multi-repository runs, a bare file name may match more
+				// than one repository. Choose the first deterministic match for
+				// backward compatibility with the frontend's file-only queries.
 				writeError(w, http.StatusNotFound, "CONFLICT_NOT_FOUND", fmt.Sprintf("No prompt context generated yet for %s", file))
 				return
 			}

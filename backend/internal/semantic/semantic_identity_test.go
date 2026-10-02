@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"context"
 	"testing"
 
 	parser "CommitIssues/internal/parser"
@@ -59,7 +60,7 @@ func TestGenerateSmartDiff_DistinctScopesStayDistinct(t *testing.T) {
 		scopedFn("B", "run", "", "theirs-in-B"),
 	}}
 
-	result := GenerateSmartDiff(parser.ASTContext{}, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), parser.ASTContext{}, ours, theirs)
 
 	if len(result.Collisions) != 2 {
 		t.Fatalf("expected 2 distinct collisions for two scopes, got %d: %#v", len(result.Collisions), result.Collisions)
@@ -83,7 +84,7 @@ func TestGenerateSmartDiff_OverloadsDistinctBySignature(t *testing.T) {
 		scopedFn("", "parse", "(string)", "theirs-string"),
 	}}
 
-	result := GenerateSmartDiff(parser.ASTContext{}, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), parser.ASTContext{}, ours, theirs)
 	if len(result.Collisions) != 2 {
 		t.Fatalf("expected 2 collisions for overloads, got %d", len(result.Collisions))
 	}

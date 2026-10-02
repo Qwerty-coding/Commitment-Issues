@@ -174,23 +174,29 @@ func GenerateSmartDiffContext(ctx context.Context, base, ours, theirs parser.AST
 	if err := ctx.Err(); err != nil {
 		return SmartDiffResult{}, err
 	}
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(ctx, base, ours, theirs)
 	if err := ctx.Err(); err != nil {
 		return SmartDiffResult{}, err
 	}
 	return result, nil
 }
 
-func GenerateSmartDiff(base, ours, theirs parser.ASTContext) SmartDiffResult {
+func GenerateSmartDiff(ctx context.Context, base, ours, theirs parser.ASTContext) SmartDiffResult {
 	baseMap := BuildSignatureMap(base)
 	oursMap := BuildSignatureMap(ours)
 	theirsMap := BuildSignatureMap(theirs)
 
 	signatures := make(map[string]struct{}, len(oursMap)+len(theirsMap))
 	for sig := range oursMap {
+		if ctx.Err() != nil {
+			return SmartDiffResult{}
+		}
 		signatures[sig] = struct{}{}
 	}
 	for sig := range theirsMap {
+		if ctx.Err() != nil {
+			return SmartDiffResult{}
+		}
 		signatures[sig] = struct{}{}
 	}
 
@@ -379,18 +385,32 @@ func ComputeConflictScope(graph SemanticGraph, collisions []DiffItem) ConflictSc
 	scopeEdges := make(map[string]SemanticEdge)
 
 	// Seed traversal from every collision, regardless of symbol kind (functions,
-	// methods, constructors, classes, variables, files and future kinds). Match
-	// the precise identity first and fall back to the legacy kind:name key.
+	// methods, constructors, classes, variables, files and future kinds).
+	//
+	// When a collision carries a precise identity, only that precise identity is
+	// used — there is no fallback to kind:name, because falling back could match
+	// an unrelated same-named symbol from another scope/file. Fallback to the
+	// legacy kind:name key is only permitted when the collision itself lacks a
+	// precise identity, which keeps the old behaviour for legacy/simple elements.
 	seedCollisions := append([]DiffItem(nil), collisions...)
 	sort.SliceStable(seedCollisions, func(i, j int) bool {
 		return CompareDiffItems(seedCollisions[i], seedCollisions[j]) < 0
 	})
 	for _, collision := range seedCollisions {
-		root, ok := nodeByKey[DiffKey(collision)]
-		if !ok {
-			root, ok = nodeByKey[semanticNodeKey(collision.Kind, collision.Name)]
+		var root SemanticNode
+		var found bool
+		if collision.Identity != "" {
+			// Precise identity from the collision must match exactly.
+			root, found = nodeByKey[collision.Identity]
+		} else {
+			// Collision has no identity: use DiffKey(collision) first, then fall
+			// back to the legacy kind:name key for the collision.
+			root, found = nodeByKey[DiffKey(collision)]
+			if !found {
+				root, found = nodeByKey[semanticNodeKey(collision.Kind, collision.Name)]
+			}
 		}
-		if ok {
+		if found {
 			if _, seen := visited[root.ID]; !seen {
 				visited[root.ID] = struct{}{}
 				queue = append(queue, root.ID)

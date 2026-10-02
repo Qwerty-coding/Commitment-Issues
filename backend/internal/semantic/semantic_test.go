@@ -141,7 +141,7 @@ func TestGenerateSmartDiff_Collision(t *testing.T) {
 	ours := parser.ASTContext{Functions: []parser.CodeElement{fn("auth", 1, "ours")}}
 	theirs := parser.ASTContext{Functions: []parser.CodeElement{fn("auth", 1, "theirs")}}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.Collisions) != 1 {
 		t.Fatalf("expected 1 collision, got %d", len(result.Collisions))
@@ -169,7 +169,7 @@ func TestGenerateSmartDiff_NoCollision_SameContent(t *testing.T) {
 	ours := parser.ASTContext{Functions: []parser.CodeElement{fn("auth", 1, "new")}}
 	theirs := parser.ASTContext{Functions: []parser.CodeElement{fn("auth", 1, "new")}}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.Collisions) != 0 {
 		t.Errorf("identical changes on both sides should not produce a collision")
@@ -181,7 +181,7 @@ func TestGenerateSmartDiff_OurAdded(t *testing.T) {
 	ours := parser.ASTContext{Functions: []parser.CodeElement{fn("newFunc", 5, "code")}}
 	theirs := parser.ASTContext{}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.OurChanges) != 1 {
 		t.Fatalf("expected 1 OurChange, got %d", len(result.OurChanges))
@@ -199,7 +199,7 @@ func TestGenerateSmartDiff_TheirDeleted(t *testing.T) {
 	ours := parser.ASTContext{Functions: []parser.CodeElement{fn("oldFunc", 2, "code")}}
 	theirs := parser.ASTContext{}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.TheirChanges) != 1 {
 		t.Fatalf("expected 1 TheirChange, got %d", len(result.TheirChanges))
@@ -210,7 +210,7 @@ func TestGenerateSmartDiff_TheirDeleted(t *testing.T) {
 }
 
 func TestGenerateSmartDiff_EmptyEverything(t *testing.T) {
-	result := GenerateSmartDiff(parser.ASTContext{}, parser.ASTContext{}, parser.ASTContext{})
+	result := GenerateSmartDiff(context.Background(), parser.ASTContext{}, parser.ASTContext{}, parser.ASTContext{})
 	if len(result.Collisions) != 0 || len(result.OurChanges) != 0 || len(result.TheirChanges) != 0 {
 		t.Errorf("all-empty diff should produce no results")
 	}
@@ -227,7 +227,7 @@ func TestGenerateSmartDiff_CollisionsSortedByName(t *testing.T) {
 		fn("zebra", 1, "t"), fn("alpha", 2, "t"),
 	}}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.Collisions) != 2 {
 		t.Fatalf("expected 2 collisions, got %d", len(result.Collisions))
@@ -246,7 +246,7 @@ func TestGenerateSmartDiff_OurChangesSortedByIdentity(t *testing.T) {
 	}}
 	theirs := parser.ASTContext{Functions: []parser.CodeElement{fn("existing", 10, "old")}}
 
-	result := GenerateSmartDiff(base, ours, theirs)
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
 
 	if len(result.OurChanges) != 2 {
 		t.Fatalf("expected 2 OurChanges, got %d", len(result.OurChanges))
