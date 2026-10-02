@@ -149,12 +149,16 @@ func FindGitRepositoryRoots(ctx context.Context, rootDir string) ([]string, erro
 
 		if path != rootDir {
 			gitDir := filepath.Join(path, ".git")
-			if info, statErr := os.Stat(gitDir); statErr == nil && info.IsDir() {
+			info, statErr := os.Stat(gitDir)
+			if statErr == nil && info.IsDir() {
 				if _, exists := seen[path]; !exists {
 					seen[path] = struct{}{}
 					repoRoots = append(repoRoots, path)
 				}
 				return filepath.SkipDir
+			}
+			if statErr != nil && !os.IsNotExist(statErr) {
+				return fmt.Errorf("failed to stat git directory %s while searching for repository roots: %w", gitDir, statErr)
 			}
 		}
 
