@@ -27,6 +27,8 @@ import (
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
+	git "CommitIssues/internal/git"
+	resolutions "CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
 )
@@ -159,6 +161,11 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 			if stored, ok := run.FindSuggestion(analysis.Repository, analysis.File, key); ok {
 				switch stored.Status {
 				case runstate.StatusComplete, runstate.StatusBelowThreshold:
+					if stored.ResolutionID == "" && run != nil {
+						if res, found := run.FindResolutionBySuggestion(stored.ID); found {
+							stored.ResolutionID = res.ID
+						}
+					}
 					reusable = append(reusable, stored)
 					meta.Reused++
 					continue
@@ -202,6 +209,11 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 			if stored, ok := run.FindSuggestion(t.analysis.Repository, t.analysis.File, t.key); ok {
 				switch stored.Status {
 				case runstate.StatusComplete, runstate.StatusBelowThreshold:
+					if stored.ResolutionID == "" && run != nil {
+						if res, found := run.FindResolutionBySuggestion(stored.ID); found {
+							stored.ResolutionID = res.ID
+						}
+					}
 					results[idx] = stored
 					mu.Lock()
 					meta.Reused++
@@ -210,7 +222,7 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 				}
 			}
 
-			item := g.resolveOne(ctx, resolver, t.analysis, t.collision, t.key)
+			item := g.resolveOne(ctx, run, resolver, t.analysis, t.collision, t.key)
 			run.SaveSuggestion(t.analysis.Repository, item)
 
 			mu.Lock()
@@ -277,14 +289,51 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 // resolveOne performs one validated, retried AI resolution and wraps the
 // outcome in a metadata-complete Suggestion. It never panics, never blocks
 // on locks, and always records a status.
-func (g *Generator) resolveOne(ctx context.Context, resolver ai.Resolver, analysis promptcontext.FileAnalysis, collision semantic.DiffItem, key string) runstate.Suggestion {
+func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver ai.Resolver, analysis promptcontext.FileAnalysis, collision semantic.DiffItem, key string) runstate.Suggestion {
 	started := time.Now().UTC()
+	revision := 1
+	if run != nil {
+		if prior, ok := run.FindSuggestion(analysis.Repository, analysis.File, key); ok {
+			if prior.Revision > 0 {
+				revision = prior.Revision + 1
+			} else {
+				revision = 2
+			}
+			// When regenerated: invalidate previous approvals, mark existing previews stale
+			if priorRes, found := run.FindResolutionBySuggestion(prior.ID); found {
+				if priorRes.Status != resolutions.StatusApplied && priorRes.Status != resolutions.StatusReverted {
+					priorRes.Status = resolutions.StatusStale
+					priorRes.ApprovalStatus = resolutions.ApprovalExpired
+					run.SaveResolution(priorRes)
+					run.RecordResolutionEvent(resolutions.ResolutionEvent{
+						ResolutionID:   priorRes.ID,
+						RunID:          run.ID,
+						Repository:     priorRes.Repository,
+						File:           priorRes.File,
+						Actor:          resolutions.ActorSystem,
+						Type:           resolutions.EventStale,
+						PreviousStatus: priorRes.Status,
+						NewStatus:      resolutions.StatusStale,
+					})
+				}
+			}
+		}
+	}
+
+	region, hasRegion := git.MatchConflictRegion(analysis.ConflictRegions, collision.Line, collision.OurContent, collision.TheirContent, collision.BaseContent)
+	var regionID string
+	if hasRegion {
+		regionID = fmt.Sprintf("%d", region.Index)
+	}
+
 	item := runstate.Suggestion{
 		ID:           fmt.Sprintf("%s|%s|%s", analysis.Repository, analysis.File, key),
 		File:         analysis.File,
 		Repository:   analysis.Repository,
 		Collision:    collision,
 		CollisionKey: key,
+		Revision:     revision,
+		RegionID:     regionID,
 		Provider:     g.Cfg.Provider,
 		Model:        g.Cfg.Model,
 		Status:       runstate.StatusFailed,
@@ -310,6 +359,38 @@ func (g *Generator) resolveOne(ctx context.Context, resolver ai.Resolver, analys
 	if res.Confidence < g.Cfg.ConfidenceThreshold {
 		item.Status = runstate.StatusBelowThreshold
 	}
+
+	if run != nil && (item.Status == runstate.StatusComplete || item.Status == runstate.StatusBelowThreshold) {
+		contextHash := ""
+		if analysis.RegionContextHashes != nil {
+			contextHash = analysis.RegionContextHashes[regionID]
+		}
+		resolutionRecord := resolutions.Resolution{
+			ID:               resolutions.NewID(),
+			SuggestionID:     item.ID,
+			RunID:            run.ID,
+			Repository:       analysis.Repository,
+			File:             analysis.File,
+			CollisionKey:     key,
+			Revision:         revision,
+			RegionID:         regionID,
+			StartLine:        region.StartLine,
+			EndLine:          region.EndLine,
+			ContentHash:      analysis.ContentHash,
+			ContextHash:      contextHash,
+			Base:             region.Base,
+			Ours:             region.Ours,
+			Theirs:           region.Theirs,
+			Replacement:      item.Resolution.SuggestedCode,
+			Status:           resolutions.StatusProposed,
+			ApprovalStatus:   resolutions.ApprovalNone,
+			ValidationStatus: resolutions.ValidationNotRun,
+			CreatedAt:        time.Now().UTC(),
+		}
+		savedRes := run.SaveResolution(resolutionRecord)
+		item.ResolutionID = savedRes.ID
+	}
+
 	return item
 }
 

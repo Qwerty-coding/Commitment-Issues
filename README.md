@@ -34,7 +34,7 @@ From `backend/`, use:
 ### Backend environment
 
 The backend supports AI integration via `ollama`, `gemini`, and `groq`. **Ollama is the default
-provider** and `qwen2:1.5b` is the documented default Ollama model; `resolve` and the Suggestions
+provider** and `qwen2.5-coder:7b` is the documented default Ollama model; `resolve` and the Suggestions
 API are the only AI-invoking paths (`scan`, `analyze` and `serve` are AI-free).
 
 Configuration precedence is: **CLI flags > environment variables > provider defaults**. Nothing is
@@ -43,7 +43,7 @@ hard-coded and providers/models are never switched silently.
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `AI_PROVIDER` | `ollama`, `gemini` or `groq` | `ollama` |
-| `AI_MODEL` | Provider model name | `qwen2:1.5b` (ollama), `gemini-3.5-flash`, `llama-3.3-70b-versatile` |
+| `AI_MODEL` | Provider model name | `qwen2.5-coder:7b` (ollama), `gemini-3.5-flash`, `llama-3.3-70b-versatile` |
 | `AI_BASE_URL` | Provider endpoint (OpenAI-compatible for ollama/groq) | `http://localhost:11434/v1` (ollama) |
 | `AI_API_KEY` | API key for hosted providers | — |
 | `AI_TIMEOUT` | Per-request timeout (Go duration) | `60s` |

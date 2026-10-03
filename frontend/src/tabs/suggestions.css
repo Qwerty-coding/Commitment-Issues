@@ -496,6 +496,307 @@
     color: #b42318;
 }
 
+.suggestion-status-proposed {
+    background: #f1f3f9;
+    color: #475467;
+}
+
+.suggestion-status-previewed {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.suggestion-status-approved {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.suggestion-status-applied {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.suggestion-status-reverted {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.suggestion-status-stale {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.suggestion-status-validation_failed {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
 .ai-suggestion-card-failed {
     border-color: #f3c2c2;
+}
+
+.ai-suggestion-card-applied {
+    border-color: #86efac;
+    background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+.ai-suggestion-card-approved {
+    border-color: #bfdbfe;
+    background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%);
+}
+
+.ai-suggestion-card-stale {
+    border-color: #fde68a;
+    background: linear-gradient(180deg, #ffffff 0%, #fffbeb 100%);
+}
+
+.ai-suggestion-card-reverted {
+    border-color: #e5e7eb;
+    background: #fafafa;
+    opacity: 0.88;
+}
+
+/* Validation status badge */
+.validation-status-badge {
+    padding: 7px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.validation-status-passed {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.validation-status-failed {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.validation-status-running {
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.validation-status-timed_out,
+.validation-status-cancelled {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.validation-status-not_run {
+    background: #f3f4f6;
+    color: #6b7280;
+}
+
+/* Stale file warning banner */
+.stale-warning-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    border-radius: 14px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    font-size: 14px;
+}
+
+.stale-warning-text {
+    flex: 1;
+    line-height: 1.5;
+}
+
+.resolution-error-banner {
+    margin-bottom: 20px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    color: #991b1b;
+    font-size: 14px;
+}
+
+/* Patch Unified Diff View */
+.patch-diff-container {
+    margin-top: 10px;
+}
+
+.diff-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.diff-note {
+    font-size: 12px;
+    color: #6b7280;
+    font-weight: normal;
+}
+
+.patch-diff-view {
+    margin: 0;
+    padding: 16px;
+    background: #0f172a;
+    color: #f8fafc;
+    border-radius: 14px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.diff-line {
+    white-space: pre-wrap;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+
+.diff-line-add {
+    background-color: rgba(34, 197, 94, 0.2);
+    color: #86efac;
+}
+
+.diff-line-del {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+}
+
+.diff-line-hunk {
+    background-color: rgba(56, 189, 248, 0.15);
+    color: #7dd3fc;
+    font-weight: 600;
+}
+
+/* Action Toolbar */
+.resolution-action-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.action-btn {
+    padding: 10px 22px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+
+.action-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.preview-btn {
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+}
+
+.preview-btn:hover:not(:disabled) {
+    background: #e2e8f0;
+}
+
+.approve-btn {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+}
+
+.approve-btn:hover:not(:disabled) {
+    background: #dbeafe;
+}
+
+.approve-btn-approved {
+    background: #dbeafe;
+    color: #1e40af;
+    border-color: #93c5fd;
+    cursor: default;
+}
+
+.apply-btn {
+    background: #16a34a;
+    color: white;
+}
+
+.apply-btn:hover:not(:disabled) {
+    background: #15803d;
+}
+
+.revert-btn {
+    background: #fee2e2;
+    color: #b91c1c;
+    border: 1px solid #fca5a5;
+}
+
+.revert-btn:hover:not(:disabled) {
+    background: #fecaca;
+}
+
+.refresh-analysis-btn {
+    padding: 8px 18px;
+    background: #d97706;
+    color: white;
+    font-size: 13px;
+}
+
+.refresh-analysis-btn:hover {
+    background: #b45309;
+}
+
+/* Inline Revert Confirmation */
+.revert-confirm-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    width: 100%;
+}
+
+.revert-confirm-warning {
+    flex: 1;
+    font-size: 13px;
+    color: #991b1b;
+    line-height: 1.5;
+}
+
+.revert-confirm-btn {
+    background: #dc2626;
+    color: white;
+}
+
+.revert-confirm-btn:hover:not(:disabled) {
+    background: #b91c1c;
+}
+
+.revert-cancel-btn {
+    background: white;
+    color: #4b5563;
+    border: 1px solid #d1d5db;
+}
+
+.revert-cancel-btn:hover {
+    background: #f9fafb;
+}
+
+.reverted-notice {
+    font-size: 14px;
+    color: #166534;
+    font-weight: 600;
 }

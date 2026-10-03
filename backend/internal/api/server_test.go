@@ -109,7 +109,9 @@ func TestSuggestions_SuccessWithMetadata(t *testing.T) {
 	useOllamaEnv(t, srv.URL+"/v1")
 
 	run := seededRun(t, "/repo", "a.js", []string{"one", "two"})
-	handler := NewHandler(run, runstate.NewHistory(10))
+	history := runstate.NewHistory(10)
+	history.Record(runstate.RunHistory{RunID: run.ID, Repository: "/repo", StartedAt: run.StartedAt})
+	handler := NewHandler(run, history)
 
 	rec := doGet(t, handler, "/api/suggestions?file=a.js")
 	if rec.Code != http.StatusOK {
@@ -132,6 +134,10 @@ func TestSuggestions_SuccessWithMetadata(t *testing.T) {
 	}
 	if payload.Meta == nil || payload.Meta.Provider != "ollama" || payload.Meta.Generated != 2 {
 		t.Errorf("meta = %+v", payload.Meta)
+	}
+	entries := history.List()
+	if len(entries) != 1 || entries[0].Succeeded != 2 || entries[0].Failed != 0 {
+		t.Fatalf("history was not updated from API suggestions: %+v", entries)
 	}
 }
 

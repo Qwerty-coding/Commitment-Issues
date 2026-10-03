@@ -38,7 +38,7 @@ const (
 	// DefaultProvider is Ollama-first per the Phase 2 plan.
 	DefaultProvider = "ollama"
 	// DefaultOllamaModel is the documented default model for Ollama.
-	DefaultOllamaModel = "qwen2:1.5b"
+	DefaultOllamaModel = "qwen2.5-coder:7b"
 	// DefaultOllamaBaseURL is the standard local Ollama OpenAI-compatible port.
 	DefaultOllamaBaseURL = "http://localhost:11434/v1"
 	// DefaultGeminiModel is the documented default model for Gemini.

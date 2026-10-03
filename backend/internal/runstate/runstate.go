@@ -22,6 +22,7 @@ import (
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
 	graph "CommitIssues/internal/graph"
+	"CommitIssues/internal/resolutions"
 	semantic "CommitIssues/internal/semantic"
 )
 
@@ -59,6 +60,17 @@ type Suggestion struct {
 	// suggestion (visible in logs and response metadata).
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	// Revision is the generation of the suggestion. It is
+	// incremented when the suggestion is regenerated for the
+	// same collision, which invalidates resolutions (and
+	// their approvals) built from earlier revisions.
+	// Phase 2 semantics; populated by the regeneration path.
+	Revision int `json:"revision,omitempty"`
+	// RegionID identifies the exact conflict region within the file
+	// that this suggestion was generated for.
+	RegionID string `json:"regionId,omitempty"`
+	// ResolutionID links this suggestion to its active resolution.
+	ResolutionID string `json:"resolutionId,omitempty"`
 	// Status is one of "complete", "below_threshold", "failed".
 	Status string `json:"status,omitempty"`
 	// ErrorCode is the typed failure code when Status is "failed".
@@ -102,14 +114,18 @@ type Run struct {
 	ID        string
 	StartedAt time.Time
 
-	mu           sync.RWMutex
-	analyses     map[string]promptcontext.FileAnalysis
-	prompts      map[string]promptcontext.PromptContextIR
-	graphs       map[string]graph.CyGraph
-	reports      map[string][]byte
-	suggestions  map[string][]Suggestion
-	inFlight     map[string]struct{}
-	repositoryMD RepositoryMetadata
+	mu                 sync.RWMutex
+	analyses           map[string]promptcontext.FileAnalysis
+	prompts            map[string]promptcontext.PromptContextIR
+	graphs             map[string]graph.CyGraph
+	reports            map[string][]byte
+	suggestions        map[string][]Suggestion
+	inFlight           map[string]struct{}
+	resolutions        map[string]resolutions.Resolution
+	resolutionEvents   []resolutions.ResolutionEvent
+	resolutionInFlight map[string]struct{}
+	eventSeq           int64
+	repositoryMD       RepositoryMetadata
 }
 
 // NewRun creates a run with a unique identifier.
@@ -124,14 +140,17 @@ func NewRunWithID(id string) *Run {
 		id = newRunID()
 	}
 	return &Run{
-		ID:          id,
-		StartedAt:   time.Now().UTC(),
-		analyses:    make(map[string]promptcontext.FileAnalysis),
-		prompts:     make(map[string]promptcontext.PromptContextIR),
-		graphs:      make(map[string]graph.CyGraph),
-		reports:     make(map[string][]byte),
-		suggestions: make(map[string][]Suggestion),
-		inFlight:    make(map[string]struct{}),
+		ID:                 id,
+		StartedAt:          time.Now().UTC(),
+		analyses:           make(map[string]promptcontext.FileAnalysis),
+		prompts:            make(map[string]promptcontext.PromptContextIR),
+		graphs:             make(map[string]graph.CyGraph),
+		reports:            make(map[string][]byte),
+		suggestions:        make(map[string][]Suggestion),
+		inFlight:           make(map[string]struct{}),
+		resolutions:        make(map[string]resolutions.Resolution),
+		resolutionEvents:   make([]resolutions.ResolutionEvent, 0),
+		resolutionInFlight: make(map[string]struct{}),
 	}
 }
 

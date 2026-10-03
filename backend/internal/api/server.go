@@ -171,7 +171,7 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 
 	mux.HandleFunc("/api/suggestions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		handleSuggestions(w, r, run)
+		handleSuggestions(w, r, run, history)
 	})
 
 	mux.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +190,10 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 		})
 	}
 
+	// Phase 5: resolution endpoints and analysis refresh.
+	registerResolutionHandlers(mux, run)
+	handleAnalysisRefresh(mux, run)
+
 	return mux
 }
 
@@ -197,12 +201,13 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 // request-scoped context (no context.Background()): client disconnects
 // cancel generation, per-request timeouts are honored, and provider/model
 // metadata is returned alongside the suggestions.
-func handleSuggestions(w http.ResponseWriter, r *http.Request, run *runstate.Run) {
+func handleSuggestions(w http.ResponseWriter, r *http.Request, run *runstate.Run, history *runstate.History) {
 	ctx := r.Context()
 	file := r.URL.Query().Get("file")
 
 	generator := &suggestions.Generator{
-		Cfg: ai.ConfigFromEnv(),
+		Cfg:     ai.ConfigFromEnv(),
+		History: history,
 	}
 
 	var (

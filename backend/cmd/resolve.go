@@ -156,7 +156,7 @@ func buildAIConfigFromFlags(cmd *cobra.Command) ai.Config {
 func init() {
 	resolveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "API Key for the AI provider (env: AI_API_KEY)")
 	resolveCmd.Flags().StringVarP(&provider, "provider", "p", "", "AI Provider (ollama, gemini, groq; env: AI_PROVIDER; default: ollama)")
-	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (env: AI_MODEL; default: qwen2:1.5b for ollama)")
+	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (env: AI_MODEL; default: qwen2.5-coder:7b for ollama)")
 	resolveCmd.Flags().StringVar(&baseURL, "url", "", "Custom base URL (env: AI_BASE_URL)")
 	resolveCmd.Flags().IntVarP(&threshold, "threshold", "t", ai.DefaultConfidenceThreshold, "Confidence threshold percentage (env: AI_CONFIDENCE_THRESHOLD)")
 	resolveCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 4, "Max concurrent files")

@@ -93,8 +93,14 @@ func TestProcessConflictFile_ProviderUnavailableDoesNotFailFile(t *testing.T) {
 	if outcome.Err != nil {
 		t.Fatalf("an unavailable provider must not fail the analysis file: %v", outcome.Err)
 	}
-	if items, ok := run.GetSuggestions(dir, "ai.js"); ok && len(items) > 0 {
-		t.Errorf("no suggestions should be recorded for an unavailable provider: %+v", items)
+	items, ok := run.GetSuggestions(dir, "ai.js")
+	if !ok || len(items) == 0 {
+		t.Fatal("provider setup failure should be recorded for each collision")
+	}
+	for _, item := range items {
+		if item.Status != runstate.StatusFailed || item.ErrorCode != string(ai.CodeProviderUnavailable) {
+			t.Errorf("provider failure metadata = %+v", item)
+		}
 	}
 	// The deterministic analysis artifacts are still registered.
 	if _, ok := run.GetAnalysis(dir, "ai.js"); !ok {

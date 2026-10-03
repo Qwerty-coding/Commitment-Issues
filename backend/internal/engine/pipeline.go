@@ -14,16 +14,19 @@ import (
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
+	"CommitIssues/internal/fileutil"
 	git "CommitIssues/internal/git"
 	graph "CommitIssues/internal/graph"
 	parser "CommitIssues/internal/parser"
 	prompt "CommitIssues/internal/prompt"
 	report "CommitIssues/internal/report"
+	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
+
 
 // FileOutcome is the result of processing a single conflicted file. Errors are
 // always structured (see *FileError) so a single bad file cannot terminate the
@@ -359,17 +362,46 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 	if run != nil {
 		run.RegisterPromptContext(repoRoot, conflictData.FileName, promptCtx)
 		run.RegisterGraph(repoRoot, conflictData.FileName, graph.BuildCyGraph(repoRoot, conflictData.FileName, smartDiff, conflictScope))
+
+		// ── Phase 2: compute working-tree hashes and capture conflict regions ──
+		var (
+			contentHash         string
+			regionContextHashes map[string]string
+			wtRegions           []git.ConflictRegion
+		)
+		absFilePath := filepath.Join(repoRoot, targetFile)
+		if ch, rh, hashErr := fileutil.RegionContextHashesForFile(absFilePath); hashErr == nil {
+			contentHash = ch
+			regionContextHashes = rh
+		} else {
+			debugPrintf("[analyze] file %s: Phase 2 hash skipped: %v\n", targetFile, hashErr)
+		}
+		// Use the regions already parsed from the on-disk file when source is
+		// inline. For staged files, re-read the working-tree copy (which still
+		// has markers at apply time) for accurate region capture.
+		if conflictData.Source == git.SourceInline {
+			wtRegions = conflictData.Regions
+		} else if data, readErr := os.ReadFile(absFilePath); readErr == nil {
+			wtRegions = git.ParseConflictRegions(string(data)).Regions
+		}
+
 		run.RegisterAnalysis(repoRoot, promptcontext.FileAnalysis{
-			Repository:        repoRoot,
-			File:              conflictData.FileName,
-			RepositorySummary: fmt.Sprintf("Repository root: %s", repoRoot),
-			PromptContext:     promptCtx,
-			BaseAST:           baseASTData,
-			OurAST:            ourASTData,
-			TheirAST:          theirASTData,
-			SmartDiff:         smartDiff,
+			Repository:          repoRoot,
+			File:                conflictData.FileName,
+			RepositorySummary:   fmt.Sprintf("Repository root: %s", repoRoot),
+			PromptContext:       promptCtx,
+			BaseAST:             baseASTData,
+			OurAST:              ourASTData,
+			TheirAST:            theirASTData,
+			SmartDiff:           smartDiff,
+			ContentHash:         contentHash,
+			ConflictRegions:     wtRegions,
+			RegionContextHashes: regionContextHashes,
+			ParserVersion:       fileutil.ParserVersion,
+			AnalysisTimestamp:   time.Now().UTC(),
 		})
 	}
+
 
 	var reportPath string
 	if jsonBytes != nil && run != nil {
@@ -417,6 +449,10 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 	if err != nil {
 		debugPrintf("[analyze] file %s: AI provider initialization failed: %v\n", targetFile, err)
 		fmt.Fprintf(buf, "Failed to initialize AI provider: %v\n", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		recordAISetupFailures(run, repoRoot, targetFile, smartDiff, aiConfig, err)
 		return nil
 	}
 
@@ -424,6 +460,10 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 	if err := ai.CheckProvider(ctx, aiConfig, nil); err != nil {
 		debugPrintf("[analyze] file %s: AI provider health check failed: %v\n", targetFile, err)
 		fmt.Fprintf(buf, "AI provider unavailable: %v\n", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		recordAISetupFailures(run, repoRoot, targetFile, smartDiff, aiConfig, err)
 		return nil
 	}
 
@@ -439,12 +479,21 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 		duration := formatDuration(time.Since(collisionStart))
 
 		if run != nil {
+			analysis, _ := run.GetAnalysis(repoRoot, targetFile)
+			region, hasRegion := git.MatchConflictRegion(analysis.ConflictRegions, collision.Line, collision.OurContent, collision.TheirContent, collision.BaseContent)
+			var regionID string
+			if hasRegion {
+				regionID = fmt.Sprintf("%d", region.Index)
+			}
+
 			item := runstate.Suggestion{
 				ID:           runstate.SuggestionKey(repoRoot, targetFile, semantic.DiffKey(collision)),
 				File:         targetFile,
 				Repository:   repoRoot,
 				Collision:    collision,
 				CollisionKey: semantic.DiffKey(collision),
+				Revision:     1,
+				RegionID:     regionID,
 				Provider:     aiConfig.Provider,
 				Model:        aiConfig.Model,
 				StartedAt:    started,
@@ -465,6 +514,34 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 				if res.Confidence < cfg.ConfidenceThreshold {
 					item.Status = runstate.StatusBelowThreshold
 				}
+				contextHash := ""
+				if analysis.RegionContextHashes != nil {
+					contextHash = analysis.RegionContextHashes[regionID]
+				}
+				resolutionRecord := resolutions.Resolution{
+					ID:               resolutions.NewID(),
+					SuggestionID:     item.ID,
+					RunID:            run.ID,
+					Repository:       repoRoot,
+					File:             targetFile,
+					CollisionKey:     semantic.DiffKey(collision),
+					Revision:         1,
+					RegionID:         regionID,
+					StartLine:        region.StartLine,
+					EndLine:          region.EndLine,
+					ContentHash:      analysis.ContentHash,
+					ContextHash:      contextHash,
+					Base:             region.Base,
+					Ours:             region.Ours,
+					Theirs:           region.Theirs,
+					Replacement:      res.SuggestedCode,
+					Status:           resolutions.StatusProposed,
+					ApprovalStatus:   resolutions.ApprovalNone,
+					ValidationStatus: resolutions.ValidationNotRun,
+					CreatedAt:        time.Now().UTC(),
+				}
+				savedRes := run.SaveResolution(resolutionRecord)
+				item.ResolutionID = savedRes.ID
 			}
 			run.SaveSuggestion(repoRoot, item)
 		}
@@ -487,6 +564,32 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 		}
 	}
 	return nil
+}
+
+func recordAISetupFailures(run *runstate.Run, repoRoot, targetFile string, smartDiff semantic.SmartDiffResult, cfg ai.Config, err error) {
+	if run == nil {
+		return
+	}
+	typed := ai.AsError(err)
+	now := time.Now().UTC()
+	for _, collision := range smartDiff.Collisions {
+		key := semantic.DiffKey(collision)
+		run.SaveSuggestion(repoRoot, runstate.Suggestion{
+			ID:           runstate.SuggestionKey(repoRoot, targetFile, key),
+			File:         targetFile,
+			Repository:   repoRoot,
+			Collision:    collision,
+			CollisionKey: key,
+			Provider:     cfg.Provider,
+			Model:        cfg.Model,
+			Status:       runstate.StatusFailed,
+			ErrorCode:    string(typed.Code),
+			Retryable:    typed.Retryable,
+			ErrorMessage: typed.Error(),
+			StartedAt:    now,
+			CompletedAt:  now,
+		})
+	}
 }
 
 func runID(run *runstate.Run) string {

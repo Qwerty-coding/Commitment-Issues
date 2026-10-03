@@ -33,7 +33,7 @@ func tagsServer(t *testing.T, models []string, status int) *httptest.Server {
 }
 
 func TestCheckProvider_OllamaReachableWithModel(t *testing.T) {
-	srv := tagsServer(t, []string{"llama3:latest", "qwen2:1.5b"}, http.StatusOK)
+	srv := tagsServer(t, []string{"llama3:latest", "qwen2.5-coder:7b"}, http.StatusOK)
 	cfg := Default("")
 	cfg.BaseURL = srv.URL + "/v1"
 	if err := CheckProvider(context.Background(), cfg, nil); err != nil {

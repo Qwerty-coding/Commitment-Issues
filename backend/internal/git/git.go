@@ -624,3 +624,43 @@ func showStage(ctx context.Context, repoDir string, stage int, filename string) 
 	}
 	return out.String(), nil
 }
+
+// MatchConflictRegion finds the best matching ConflictRegion from regions for a
+// conflict collision based on line location and content overlap.
+func MatchConflictRegion(regions []ConflictRegion, line int, ourContent, theirContent, baseContent string) (ConflictRegion, bool) {
+	if len(regions) == 0 {
+		return ConflictRegion{}, false
+	}
+	if len(regions) == 1 {
+		return regions[0], true
+	}
+	// 1. Line range match (line is between StartLine and EndLine inclusive).
+	for _, r := range regions {
+		if line >= r.StartLine && line <= r.EndLine {
+			return r, true
+		}
+	}
+	// 2. Content overlap match.
+	for _, r := range regions {
+		if (ourContent != "" && strings.Contains(r.Ours, ourContent)) ||
+			(theirContent != "" && strings.Contains(r.Theirs, theirContent)) ||
+			(baseContent != "" && strings.Contains(r.Base, baseContent)) {
+			return r, true
+		}
+	}
+	// 3. Closest by line distance.
+	closest := regions[0]
+	minDist := 1 << 30
+	for _, r := range regions {
+		dist := line - r.StartLine
+		if dist < 0 {
+			dist = -dist
+		}
+		if dist < minDist {
+			minDist = dist
+			closest = r
+		}
+	}
+	return closest, true
+}
+
