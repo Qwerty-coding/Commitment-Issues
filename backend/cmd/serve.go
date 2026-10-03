@@ -41,7 +41,7 @@ var serveCmd = &cobra.Command{
 
 		conflictsByRepo, repoRoots, err := engine.FindConflicts(ctx, scanRoot)
 		if err != nil {
-			fmt.Printf("Error scanning for conflicts: %v\n", err)
+			return fmt.Errorf("scan conflicts: %w", err)
 		}
 
 		run := runstate.NewRun()
