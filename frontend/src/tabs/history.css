@@ -58,3 +58,103 @@
   border-radius: 24px;
   color: #667085;
 }
+
+/* Phase 2: run history run model */
+
+.history-subtitle {
+  margin: -8px 0 28px;
+  color: #667085;
+  font-size: 15px;
+}
+
+.history-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.history-card-head h3 {
+  margin: 0;
+  font-family: monospace;
+  font-size: 17px;
+  word-break: break-word;
+}
+
+.history-status {
+  flex-shrink: 0;
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.history-status-ok {
+  background: #e8f6ee;
+  color: #1d7a45;
+}
+
+.history-status-warning {
+  background: #fff7e6;
+  color: #b45309;
+}
+
+.history-status-pending {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.history-provider {
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4f46e5;
+}
+
+.history-value-error {
+  color: #b42318;
+}
+
+.history-errors {
+  margin: 14px 0 0;
+  padding: 14px 18px;
+  background: #fffafa;
+  border: 1px solid #f3c2c2;
+  border-radius: 16px;
+  list-style: none;
+}
+
+.history-errors li {
+  font-size: 13px;
+  color: #b42318;
+  word-break: break-word;
+}
+
+.history-errors li + li {
+  margin-top: 6px;
+}
+
+.history-error {
+  border-color: #f3c2c2;
+  background: #fffafa;
+  color: #b42318;
+}
+
+.history-retry {
+  margin-top: 14px;
+  padding: 10px 22px;
+  border: none;
+  border-radius: 12px;
+  background: #4f46e5;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.history-retry:hover {
+  background: #4338ca;
+}

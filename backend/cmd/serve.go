@@ -3,9 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
+	"time"
 
+	ai "CommitIssues/internal/ai"
 	"CommitIssues/internal/api"
 	"CommitIssues/internal/engine"
 	"CommitIssues/internal/git"
@@ -25,10 +26,11 @@ var serveCmd = &cobra.Command{
 			targetPath = args[0]
 		}
 
+		// serve remains AI-free: no resolver is ever invoked here. The shared
+		// AI configuration is only used for metadata (provider/model shown in
+		// run history) and stays env-driven, never hard-coded.
 		cfg := engine.DefaultConfig()
-		cfg.Provider = "ollama"
-		cfg.Model = "qwen2:1.5b"
-		cfg.BaseURL = os.Getenv("OLLAMA_BASE_URL")
+		cfg.AI = ai.ConfigFromEnv()
 		if err := cfg.Validate(); err != nil {
 			return err
 		}
@@ -45,6 +47,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		run := runstate.NewRun()
+		history := runstate.NewHistory(runstate.DefaultHistoryLimit)
 
 		if len(repoRoots) > 0 {
 			repoRoot := repoRoots[0]
@@ -60,15 +63,56 @@ var serveCmd = &cobra.Command{
 				continue
 			}
 			fmt.Printf("Loading %d conflict(s) from %s\n", len(conflicts), repoRoot)
-			if _, processErr := engine.ProcessRepository(ctx, run, repoRoot, conflicts, cfg, false); processErr != nil {
+			result, processErr := engine.ProcessRepository(ctx, run, repoRoot, conflicts, cfg, false)
+
+			// Record the analysis run in the bounded in-memory history so the
+			// History API exposes real run data.
+			entry := runstate.RunHistory{
+				RunID:      run.ID,
+				Repository: repoRoot,
+				StartedAt:  run.StartedAt,
+				Provider:   cfg.AI.Provider,
+				Model:      cfg.AI.Model,
+			}
+			if result != nil {
+				entry.CompletedAt = time.Now().UTC()
+				entry.FilesAnalyzed = len(result.Succeeded)
+				entry.FailedFiles = len(result.Failed)
+				entry.CollisionCount = collisionCountFor(run, repoRoot)
+				for _, failed := range result.Failed {
+					if failed.Err != nil {
+						entry.ErrorSummaries = append(entry.ErrorSummaries, failed.Err.Error())
+					}
+				}
+			}
+			switch ctx.Err() {
+			case context.DeadlineExceeded:
+				entry.TimedOut = true
+			case context.Canceled:
+				entry.Cancelled = true
+			}
+			history.Record(entry)
+
+			if processErr != nil {
 				fmt.Printf("Warning: analysis for %s did not complete: %v\n", repoRoot, processErr)
 			}
 		}
 
 		fmt.Printf("🚀 Starting Graph Server on http://localhost%s\n", port)
-		api.StartGraphServer(run, port)
+		api.StartGraphServer(run, history, port)
 		return nil
 	},
+}
+
+// collisionCountFor counts the analyzed collisions of one repository.
+func collisionCountFor(run *runstate.Run, repoRoot string) int {
+	total := 0
+	for _, analysis := range run.AllAnalyses() {
+		if analysis.Repository == repoRoot {
+			total += len(analysis.SmartDiff.Collisions)
+		}
+	}
+	return total
 }
 
 func init() {

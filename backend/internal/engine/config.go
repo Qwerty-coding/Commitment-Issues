@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	ai "CommitIssues/internal/ai"
 )
 
 // ErrorCode is a stable, machine-readable identifier for a pipeline error.
@@ -70,15 +72,17 @@ func (e *FileError) Unwrap() error { return e.Err }
 // Code implements CodedError.
 func (e *FileError) Code() ErrorCode { return e.ErrCode }
 
-// Config holds the runtime options supplied by the user/CLI.
+// Config holds the runtime options supplied by the user/CLI. AI provider
+// settings live in the single shared ai.Config (flags > env > provider
+// defaults); the pipeline-level fields below govern analysis only.
 type Config struct {
 	MaxConcurrency      int
 	ConfidenceThreshold int
 	Timeout             time.Duration
-	APIKey              string
-	Provider            string
-	Model               string
-	BaseURL             string
+
+	// AI is the shared provider-configuration used only when runAI is true
+	// (`resolve` and the Suggestions API). `analyze` and `serve` stay AI-free.
+	AI ai.Config
 }
 
 // DefaultConfig returns a valid baseline configuration. Callers override the
@@ -88,6 +92,7 @@ func DefaultConfig() Config {
 		MaxConcurrency:      4,
 		ConfidenceThreshold: 70,
 		Timeout:             5 * time.Minute,
+		AI:                  ai.Default(""),
 	}
 }
 

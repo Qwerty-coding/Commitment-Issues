@@ -2,41 +2,34 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	promptcontext "CommitIssues/internal/context"
 	semantic "CommitIssues/internal/semantic"
 )
 
-// AIResolutionResponse is the uniform response returned by ALL providers
+// AIResolutionResponse is the uniform response returned by ALL providers.
+// The canonical wire schema is {"explanation", "suggested_code",
+// "confidence_score"}; validation is centralized in ValidateResponse.
 type AIResolutionResponse struct {
 	Explanation   string `json:"explanation"`
 	SuggestedCode string `json:"suggested_code"`
 	Confidence    int    `json:"confidence_score"`
 }
 
-// Resolver is the contract that every AI provider must implement
+// Resolver is the contract that every AI provider must implement. The
+// context is always the caller's request-scoped context: no provider may
+// start work on context.Background().
 type Resolver interface {
 	ResolveCollision(ctx context.Context, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR) (*AIResolutionResponse, error)
 }
 
-// AIConfig holds the runtime options supplied by the user/CLI
-type AIConfig struct {
-	Provider string // e.g. "gemini", "ollama", "groq", "openai", "claude"
-	Model    string // e.g. "gemini-1.5-flash", "llama3", "qwen2.5-coder"
-	APIKey   string
-	BaseURL  string // Custom endpoint URL
-}
+// FactoryFunc is a constructor function signature for creating a Resolver.
+type FactoryFunc func(cfg Config, client *http.Client) (Resolver, error)
 
-// FactoryFunc is a constructor function signature for creating a Resolver
-type FactoryFunc func(cfg AIConfig, client *http.Client) (Resolver, error)
-
-// Standard system prompt used across all providers
+// Standard system prompt used across all providers.
 const defaultSystemPrompt = `You are an expert code resolution engine. You resolve Git merge conflicts strictly at the structural node level. You will be provided with three versions of a single function or variable: Base, Ours, and Theirs.
 
 Resolution strategy:
@@ -49,6 +42,10 @@ Output ONLY valid JSON matching this schema: {"explanation": "string", "suggeste
 
 // ============================================================================
 // DYNAMIC PROVIDER REGISTRY
+//
+// Write-once, guarded, static configuration (per the Phase 1 audit): this is
+// process init data, never run data. Suggestion/report/analysis state remains
+// fully run-scoped in internal/runstate.
 // ============================================================================
 
 var (
@@ -56,14 +53,15 @@ var (
 	providers     = make(map[string]FactoryFunc)
 )
 
-// Register makes an AI provider available to the application
+// Register makes an AI provider available to the application.
 func Register(name string, factory FactoryFunc) {
 	registryMutex.Lock()
 	defer registryMutex.Unlock()
 	providers[strings.ToLower(name)] = factory
 }
 
-// ListProviders returns a list of all currently registered AI provider names
+// ListProviders returns a sorted list of all currently registered AI provider
+// names, so registry enumeration is deterministic.
 func ListProviders() []string {
 	registryMutex.RLock()
 	defer registryMutex.RUnlock()
@@ -72,38 +70,36 @@ func ListProviders() []string {
 	for name := range providers {
 		list = append(list, name)
 	}
+	// Deterministic ordering for error messages and metadata.
+	for i := 1; i < len(list); i++ {
+		for j := i; j > 0 && list[j] < list[j-1]; j-- {
+			list[j], list[j-1] = list[j-1], list[j]
+		}
+	}
 	return list
 }
 
-// GetResolver instantiates the selected AI provider based on cfg.Provider
-func GetResolver(cfg AIConfig) (Resolver, error) {
+// GetResolver instantiates the selected AI provider based on cfg.Provider.
+// The HTTP client is bounded by the configured per-request timeout instead of
+// a hard-coded value. Callers should run CheckProvider before generating.
+func GetResolver(cfg Config) (Resolver, error) {
 	registryMutex.RLock()
 	factory, exists := providers[strings.ToLower(cfg.Provider)]
 	registryMutex.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("unsupported AI provider '%s'. Available providers: %s",
+		return nil, NewError(CodeProviderUnsupported, false,
+			"unsupported AI provider '%s'. Available providers: %s",
 			cfg.Provider, strings.Join(ListProviders(), ", "))
 	}
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	return factory(cfg, client)
-}
-
-// ============================================================================
-// SHARED UTILITIES
-// ============================================================================
-
-func parseJSONResponse(rawText string) (*AIResolutionResponse, error) {
-	rawText = strings.TrimSpace(rawText)
-	rawText = strings.TrimPrefix(rawText, "```json")
-	rawText = strings.TrimPrefix(rawText, "```")
-	rawText = strings.TrimSuffix(rawText, "```")
-	rawText = strings.TrimSpace(rawText)
-
-	var resolution AIResolutionResponse
-	if err := json.Unmarshal([]byte(rawText), &resolution); err != nil {
-		return nil, fmt.Errorf("failed to parse AI resolution JSON: %w (raw: %s)", err, rawText)
+	if err := cfg.Validate(); err != nil {
+		return nil, NewError(CodeConfigInvalid, false, "%v", err)
 	}
-	return &resolution, nil
+
+	client := NewClient(cfg)
+	resolver, err := factory(cfg, client)
+	if err != nil {
+		return nil, AsError(err)
+	}
+	return resolver, nil
 }

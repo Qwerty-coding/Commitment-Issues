@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
 	"CommitIssues/internal/runstate"
+	"CommitIssues/internal/suggestions"
 )
 
 // RepositoryMetadata and SuggestionItem are aliases to their run-scoped
@@ -22,8 +24,9 @@ type RepositoryMetadata = runstate.RepositoryMetadata
 type SuggestionItem = runstate.Suggestion
 
 type suggestionsResponse struct {
-	Success bool             `json:"success"`
-	Data    []SuggestionItem `json:"data"`
+	Success bool              `json:"success"`
+	Data    []SuggestionItem  `json:"data"`
+	Meta    *suggestions.Meta `json:"meta,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -40,10 +43,34 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 // StartGraphServer serves the API and static frontend using the supplied
-// run-scoped state. A nil run is treated as an empty run.
-func StartGraphServer(run *runstate.Run, addr string) {
+// run-scoped state and bounded run history. A nil run is treated as an empty
+// run; a nil history disables the history endpoint's data (it returns an
+// empty list rather than failing).
+func StartGraphServer(run *runstate.Run, history *runstate.History, addr string) {
 	if run == nil {
 		run = runstate.NewRun()
+	}
+	if history == nil {
+		history = runstate.NewHistory(runstate.DefaultHistoryLimit)
+	}
+
+	mux := NewHandler(run, history)
+
+	fmt.Printf("listening on http://localhost%s\n", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Printf("Graph server error: %v\n", err)
+	}
+}
+
+// NewHandler builds the API + static-file handler for a run and its bounded
+// history. It is exported so handler behavior can be verified through the
+// real HTTP interface without starting a listener.
+func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
+	if run == nil {
+		run = runstate.NewRun()
+	}
+	if history == nil {
+		history = runstate.NewHistory(runstate.DefaultHistoryLimit)
 	}
 
 	mux := http.NewServeMux()
@@ -144,15 +171,15 @@ func StartGraphServer(run *runstate.Run, addr string) {
 
 	mux.HandleFunc("/api/suggestions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		file := r.URL.Query().Get("file")
+		handleSuggestions(w, r, run)
+	})
 
-		items, err := generateSuggestions(run, file)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "SUGGESTION_ERROR", err.Error())
-			return
-		}
-
-		writeJSON(w, http.StatusOK, suggestionsResponse{Success: true, Data: items})
+	mux.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		writeJSON(w, http.StatusOK, historyResponse{
+			Success: true,
+			Data:    history.List(),
+		})
 	})
 
 	for _, path := range []string{"/api/graph/expand", "/api/graph/collapse", "/api/graph/focus"} {
@@ -163,69 +190,70 @@ func StartGraphServer(run *runstate.Run, addr string) {
 		})
 	}
 
-	fmt.Printf("listening on http://localhost%s\n", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Printf("Graph server error: %v\n", err)
-	}
+	return mux
 }
 
-func generateSuggestions(run *runstate.Run, file string) ([]SuggestionItem, error) {
-	if run == nil {
-		return nil, fmt.Errorf("no analysis available to generate suggestions")
+// handleSuggestions generates run-scoped AI suggestions using the
+// request-scoped context (no context.Background()): client disconnects
+// cancel generation, per-request timeouts are honored, and provider/model
+// metadata is returned alongside the suggestions.
+func handleSuggestions(w http.ResponseWriter, r *http.Request, run *runstate.Run) {
+	ctx := r.Context()
+	file := r.URL.Query().Get("file")
+
+	generator := &suggestions.Generator{
+		Cfg: ai.ConfigFromEnv(),
 	}
 
 	var (
-		analyses []promptcontext.FileAnalysis
-		repoRoot string
+		result suggestions.Result
+		err    error
 	)
-
 	if file != "" {
-		analysis, ok := run.FindAnalysis(file)
-		if !ok {
-			return nil, fmt.Errorf("no analysis found for %s", file)
-		}
-		repoRoot = analysis.Repository
-		if items, ok := run.GetSuggestions(repoRoot, file); ok && len(items) > 0 {
-			return items, nil
-		}
-		analyses = []promptcontext.FileAnalysis{analysis}
+		result, err = generator.GenerateForFile(ctx, run, "", file)
 	} else {
-		analyses = run.AllAnalyses()
-		if len(analyses) == 0 {
-			return nil, fmt.Errorf("no analysis available to generate suggestions")
-		}
+		result, err = generator.GenerateForRun(ctx, run)
 	}
 
-	resolver, err := ai.GetResolver(ai.AIConfig{
-		Provider: "ollama",
-		Model:    "qwen2:1.5b",
-		BaseURL:  os.Getenv("OLLAMA_BASE_URL"),
-	})
+	// The client is gone: writing a response is pointless and misleading.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.Canceled) {
+			return
+		}
+		writeError(w, http.StatusGatewayTimeout, "TIMEOUT", "suggestion generation exceeded its deadline")
+		return
+	}
+
 	if err != nil {
-		return nil, err
+		writeSuggestionError(w, err)
+		return
 	}
 
-	items := make([]SuggestionItem, 0)
-	for _, analysis := range analyses {
-		for _, collision := range analysis.SmartDiff.Collisions {
-			resolution, err := resolver.ResolveCollision(context.Background(), collision, analysis.PromptContext)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate suggestion for %s: %w", analysis.File, err)
-			}
-			items = append(items, SuggestionItem{
-				File:       analysis.File,
-				Collision:  collision,
-				Resolution: *resolution,
-			})
-		}
+	meta := result.Meta
+	writeJSON(w, http.StatusOK, suggestionsResponse{Success: true, Data: result.Suggestions, Meta: &meta})
+}
+
+// writeSuggestionError maps typed AI failures to actionable HTTP responses.
+// Configuration/provider problems are 503 (the frontend can explain them),
+// missing analysis is 404, everything else is 500. API keys never appear in
+// messages (all ai errors are redacted at construction).
+func writeSuggestionError(w http.ResponseWriter, err error) {
+	typed := ai.AsError(err)
+	switch typed.Code {
+	case ai.CodeProviderUnavailable, ai.CodeModelMissing, ai.CodeAPIKeyMissing,
+		ai.CodeProviderUnsupported, ai.CodeConfigInvalid, ai.CodeBaseURLInvalid:
+		writeError(w, http.StatusServiceUnavailable, string(typed.Code), typed.Error())
+		return
+	case ai.CodeTimeout:
+		writeError(w, http.StatusGatewayTimeout, string(typed.Code), typed.Error())
+		return
 	}
 
-	// Suggestions are stored on the run, keyed by repository-safe key. The
-	// aggregate (no file) response is intentionally not cached.
-	if file != "" {
-		run.SaveSuggestions(repoRoot, file, items)
+	if strings.Contains(err.Error(), "no analysis") {
+		writeError(w, http.StatusNotFound, "ANALYSIS_NOT_FOUND", err.Error())
+		return
 	}
-	return items, nil
+	writeError(w, http.StatusInternalServerError, "SUGGESTION_ERROR", typed.Error())
 }
 
 type standardResponse struct {
@@ -240,6 +268,11 @@ type errorResponse struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type historyResponse struct {
+	Success bool                  `json:"success"`
+	Data    []runstate.RunHistory `json:"data"`
 }
 
 type promptResponse struct {

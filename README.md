@@ -33,12 +33,30 @@ From `backend/`, use:
 
 ### Backend environment
 
-The backend currently supports AI integration via providers such as `ollama`, `gemini`, and `groq`.
+The backend supports AI integration via `ollama`, `gemini`, and `groq`. **Ollama is the default
+provider** and `qwen2:1.5b` is the documented default Ollama model; `resolve` and the Suggestions
+API are the only AI-invoking paths (`scan`, `analyze` and `serve` are AI-free).
 
-Environment variables:
+Configuration precedence is: **CLI flags > environment variables > provider defaults**. Nothing is
+hard-coded and providers/models are never switched silently.
 
-- `OLLAMA_BASE_URL` - Base URL for Ollama API access.
-- `AI_API_KEY` - API key for AI providers when required.
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `AI_PROVIDER` | `ollama`, `gemini` or `groq` | `ollama` |
+| `AI_MODEL` | Provider model name | `qwen2:1.5b` (ollama), `gemini-3.5-flash`, `llama-3.3-70b-versatile` |
+| `AI_BASE_URL` | Provider endpoint (OpenAI-compatible for ollama/groq) | `http://localhost:11434/v1` (ollama) |
+| `AI_API_KEY` | API key for hosted providers | — |
+| `AI_TIMEOUT` | Per-request timeout (Go duration) | `60s` |
+| `AI_RETRIES` | Retries per request for transient failures (429/5xx) | `2` |
+| `AI_CONFIDENCE_THRESHOLD` | Suggestion confidence threshold (0-100) | `70` |
+| `AI_MAX_PROMPT_BYTES` | Reject prompts larger than this | `524288` |
+| `AI_MAX_RESPONSE_BYTES` | Reject provider responses larger than this | `1048576` |
+| `AI_RETRY_BACKOFF` | Initial exponential backoff | `500ms` |
+| `OLLAMA_BASE_URL` | Legacy Ollama base URL (used when `AI_BASE_URL` is unset) | — |
+
+Before generating suggestions the backend performs provider health checks: Ollama reachability
+and model presence, API key presence for Gemini/Groq, base URL validity, and clear unsupported
+provider errors. API keys are never logged or returned.
 
 ### API endpoints
 
@@ -48,8 +66,14 @@ When the backend server is running, the following API endpoints are available:
 - `GET /api/graph` - merged AST/semantic graph data
 - `GET /api/analysis` - all file analyses or `?file=<path>` for a specific file
 - `GET /api/prompt` - prompt context list or `?file=<path>` for a specific conflict
-- `GET /api/prompt/statistics` - prompt statistics list or `?file=<path>`
-- `GET /api/suggestions` - AI suggestions list or `?file=<path>`
+- `GET /api/suggestions` - AI suggestions list or `?file=<path>` for a specific file. Responses
+  include a `meta` object with `provider`, `model`, `runId`, generation/failure counts and
+  structured partial failures. Provider/setup problems return `503` with a typed error code
+  (`PROVIDER_UNAVAILABLE`, `MODEL_MISSING`, `API_KEY_MISSING`, ...); per-collision timeouts are
+  reported as failed suggestions so successful ones are preserved.
+- `GET /api/history` - run history (run ID, repository, timings, files analyzed, collision count,
+  provider/model, suggestion outcomes, timeout/cancellation status, error summaries). History is
+  bounded in-memory state owned by the server; database persistence is out of scope.
 
 The backend also serves static frontend assets from `../frontend/dist` when available.
 

@@ -382,7 +382,7 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 	report.PrintDiffReport(&buf, smartDiff)
 
 	if runAI {
-		if err := runAIResolution(ctx, &buf, targetFile, smartDiff, promptCtx, cfg); err != nil {
+		if err := runAIResolution(ctx, run, repoRoot, &buf, targetFile, smartDiff, promptCtx, cfg); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return FileOutcome{File: targetFile, Output: buf.String(), Err: ctxErr}
 			}
@@ -401,22 +401,29 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 	return FileOutcome{File: targetFile, Output: buf.String(), ReportPath: reportPath}
 }
 
-// runAIResolution resolves each collision in order, honoring cancellation.
-func runAIResolution(ctx context.Context, buf *bytes.Buffer, targetFile string, smartDiff semantic.SmartDiffResult, promptCtx promptcontext.PromptContextIR, cfg Config) error {
-	debugPrintf("[analyze] file %s: starting AI resolution for %d collision(s) via %s\n", targetFile, len(smartDiff.Collisions), cfg.Provider)
-	fmt.Fprintf(buf, "\nInitializing AI Provider: %s...\n", cfg.Provider)
+// runAIResolution resolves each collision in order, honoring cancellation,
+// applying the configured health check, per-request timeout and retry policy,
+// and recording every outcome as a run-scoped suggestion.
+func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, buf *bytes.Buffer, targetFile string, smartDiff semantic.SmartDiffResult, promptCtx promptcontext.PromptContextIR, cfg Config) error {
+	debugPrintf("[analyze] file %s: starting AI resolution for %d collision(s) via %s\n", targetFile, len(smartDiff.Collisions), cfg.AI.Provider)
+	fmt.Fprintf(buf, "\nInitializing AI Provider: %s (model: %s)...\n", cfg.AI.Provider, cfg.AI.Model)
 
-	aiConfig := ai.AIConfig{
-		Provider: cfg.Provider,
-		Model:    cfg.Model,
-		APIKey:   cfg.APIKey,
-		BaseURL:  cfg.BaseURL,
-	}
+	// The engine-level confidence threshold governs the pipeline; keep the
+	// shared AI config in sync so suggestion statuses use one source.
+	aiConfig := cfg.AI
+	aiConfig.ConfidenceThreshold = cfg.ConfidenceThreshold
 
 	resolver, err := ai.GetResolver(aiConfig)
 	if err != nil {
 		debugPrintf("[analyze] file %s: AI provider initialization failed: %v\n", targetFile, err)
 		fmt.Fprintf(buf, "Failed to initialize AI provider: %v\n", err)
+		return nil
+	}
+
+	// Provider health check before generation: typed and actionable.
+	if err := ai.CheckProvider(ctx, aiConfig, nil); err != nil {
+		debugPrintf("[analyze] file %s: AI provider health check failed: %v\n", targetFile, err)
+		fmt.Fprintf(buf, "AI provider unavailable: %v\n", err)
 		return nil
 	}
 
@@ -427,17 +434,51 @@ func runAIResolution(ctx context.Context, buf *bytes.Buffer, targetFile string, 
 		collisionStart := time.Now()
 		fmt.Fprintf(buf, "  -> Requesting AI resolution for [%s] %s (Line %d)...\n", collision.Kind, collision.Name, collision.Line)
 
-		res, aiErr := resolver.ResolveCollision(ctx, collision, promptCtx)
+		started := time.Now().UTC()
+		res, aiErr := ai.ResolveCollisionWithRetry(ctx, aiConfig, resolver, collision, promptCtx)
+		duration := formatDuration(time.Since(collisionStart))
+
+		if run != nil {
+			item := runstate.Suggestion{
+				ID:           runstate.SuggestionKey(repoRoot, targetFile, semantic.DiffKey(collision)),
+				File:         targetFile,
+				Repository:   repoRoot,
+				Collision:    collision,
+				CollisionKey: semantic.DiffKey(collision),
+				Provider:     aiConfig.Provider,
+				Model:        aiConfig.Model,
+				StartedAt:    started,
+				CompletedAt:  time.Now().UTC(),
+			}
+			if aiErr != nil {
+				typed := ai.AsError(aiErr)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					typed = ai.AsError(ctxErr)
+				}
+				item.Status = runstate.StatusFailed
+				item.ErrorCode = string(typed.Code)
+				item.Retryable = typed.Retryable
+				item.ErrorMessage = typed.Error()
+			} else {
+				item.Resolution = *res
+				item.Status = runstate.StatusComplete
+				if res.Confidence < cfg.ConfidenceThreshold {
+					item.Status = runstate.StatusBelowThreshold
+				}
+			}
+			run.SaveSuggestion(repoRoot, item)
+		}
+
 		if aiErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			debugPrintf("[analyze] file %s: collision %d/%d failed after %s: %v\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), aiErr)
+			debugPrintf("[analyze] file %s: collision %d/%d failed after %s: %v\n", targetFile, i+1, len(smartDiff.Collisions), duration, aiErr)
 			fmt.Fprintf(buf, "     ⚠ AI Error: %v\n", aiErr)
 			continue
 		}
 
-		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (confidence=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), formatDuration(time.Since(collisionStart)), res.Confidence)
+		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (confidence=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), duration, res.Confidence)
 		fmt.Fprintf(buf, "     ✓ Resolved (Confidence: %d%%)\n", res.Confidence)
 		fmt.Fprintf(buf, "       Explanation: %s\n", res.Explanation)
 		fmt.Fprintf(buf, "       Suggested Code:\n")

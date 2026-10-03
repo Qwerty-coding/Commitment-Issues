@@ -1,11 +1,8 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -22,26 +19,51 @@ type OllamaResolver struct {
 	BaseURL string
 	Model   string
 	Client  *http.Client
+	// APIKey is never sent to a local Ollama instance (it needs no auth) but
+	// is retained so that a configured AI_API_KEY can still be redacted from
+	// provider error messages.
+	APIKey string
+	// MaxResponseSize bounds the accepted HTTP response body.
+	MaxResponseSize int
 }
 
-func newOllamaResolver(cfg AIConfig, client *http.Client) (Resolver, error) {
-	url := cfg.BaseURL
-	if url == "" {
-		url = "http://localhost:11434/v1" // Standard local Ollama port
+func newOllamaResolver(cfg Config, client *http.Client) (Resolver, error) {
+	if parsed, err := ValidateBaseURL(cfg.BaseURL, cfg.Provider); err != nil {
+		return nil, err
+	} else if parsed == nil {
+		// Empty base URL falls back to the documented default.
+		cfg.BaseURL = DefaultOllamaBaseURL
 	}
-	model := cfg.Model
-	if model == "" {
-		model = "qwen2:1.5b"
+	if client == nil {
+		client = NewClient(cfg)
 	}
-	return &OllamaResolver{BaseURL: url, Model: model, Client: client}, nil
+	return &OllamaResolver{
+		BaseURL:         cfg.BaseURL,
+		Model:           cfg.Model,
+		Client:          client,
+		APIKey:          cfg.APIKey,
+		MaxResponseSize: cfg.MaxResponseSize,
+	}, nil
 }
 
 func (o *OllamaResolver) ResolveCollision(ctx context.Context, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR) (*AIResolutionResponse, error) {
-	userPayload, _ := json.Marshal(collision)
+	return resolveOpenAICompatible(ctx, o.Client, o.BaseURL, o.Model, "", o.APIKey, collision, promptCtx, "ollama", o.MaxResponseSize)
+}
 
-	// Ollama uses the exact same JSON format as OpenAI
+// resolveOpenAICompatible is the shared OpenAI-compatible chat completion
+// flow used by Ollama and Groq: identical payload schema, different
+// endpoints and auth.
+func resolveOpenAICompatible(ctx context.Context, client *http.Client, baseURL, model, authKey, secretKey string, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR, provider string, maxResponseSize int) (*AIResolutionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, AsError(err)
+	}
+	userPayload, err := json.Marshal(collision)
+	if err != nil {
+		return nil, NewError(CodeConfigInvalid, false, "failed to marshal collision payload: %v", err)
+	}
+
 	reqBody := map[string]any{
-		"model":       o.Model,
+		"model":       model,
 		"temperature": 0.0,
 		"messages": []map[string]string{
 			{"role": "system", "content": defaultSystemPrompt},
@@ -50,41 +72,23 @@ func (o *OllamaResolver) ResolveCollision(ctx context.Context, collision semanti
 		"response_format": map[string]string{"type": "json_object"},
 	}
 
-	bodyBytes, _ := json.Marshal(reqBody)
-	url := strings.TrimRight(o.BaseURL, "/") + "/chat/completions"
+	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
+	req, err := postJSON(ctx, url, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	if authKey != "" {
+		req.Header.Set("Authorization", "Bearer "+authKey)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	body, err := performRequest(ctx, client, req, provider, maxResponseSize, secretKey)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	// Notice: No API key header needed for local Ollama!
-
-	resp, err := o.Client.Do(req)
+	content, err := extractMessageContent(body, provider)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ollama (is it running?): %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama error (%d): %s", resp.StatusCode, string(respBytes))
-	}
-
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return nil, err
 	}
-	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("ollama returned no choices")
-	}
-
-	return parseJSONResponse(parsed.Choices[0].Message.Content)
+	return parseJSONResponse(content)
 }

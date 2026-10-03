@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
+	ai "CommitIssues/internal/ai"
 	"CommitIssues/internal/engine"
 	"CommitIssues/internal/runstate"
 
@@ -33,6 +33,8 @@ var (
 	concurrency int
 	debug       bool
 	timeout     time.Duration
+	retries     int
+	aiTimeout   time.Duration
 )
 
 var resolveCmd = &cobra.Command{
@@ -45,28 +47,30 @@ var resolveCmd = &cobra.Command{
 			fmt.Printf("[resolve] starting resolve command at %s\n", start.Format(time.RFC3339))
 		}
 
-		// Fallback to environment variable if flag isn't provided
-		if apiKey == "" {
-			apiKey = os.Getenv("AI_API_KEY")
-		}
-
 		targetPath := "conflicts"
 		if len(args) > 0 {
 			targetPath = args[0]
 		}
 
-		cfg := engine.Config{
-			MaxConcurrency:      concurrency,
-			ConfidenceThreshold: threshold,
-			Timeout:             timeout,
-			APIKey:              apiKey,
-			Provider:            provider,
-			Model:               modelName,
-			BaseURL:             baseURL,
-		}
+		cfg := engine.DefaultConfig()
+		cfg.MaxConcurrency = concurrency
+
+		// Shared AI configuration precedence: CLI flags > environment
+		// variables (AI_*) > provider defaults. Nothing is hard-coded and
+		// providers/models are never switched silently.
+		cfg.AI = buildAIConfigFromFlags(cmd)
+
+		// The pipeline-level confidence threshold keeps its Phase 1 meaning
+		// and validation; it also drives suggestion statuses.
+		cfg.ConfidenceThreshold = cfg.AI.ConfidenceThreshold
+		cfg.Timeout = timeout
+
 		// Configuration is validated before any scanning begins so invalid
 		// settings can never start analysis or deadlock the semaphore.
 		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		if err := cfg.AI.Validate(); err != nil {
 			return err
 		}
 
@@ -76,7 +80,8 @@ var resolveCmd = &cobra.Command{
 		scanRoot := engine.ResolveScanRoot(targetPath)
 		if debug {
 			fmt.Printf("[resolve] resolved scan root: %s\n", scanRoot)
-			fmt.Printf("[resolve] using provider=%s model=%s threshold=%d concurrency=%d timeout=%s\n", provider, modelName, threshold, concurrency, cfg.Timeout)
+			fmt.Printf("[resolve] using provider=%s model=%s threshold=%d concurrency=%d timeout=%s retries=%d aiTimeout=%s\n",
+				cfg.AI.Provider, cfg.AI.Model, cfg.ConfidenceThreshold, cfg.MaxConcurrency, cfg.Timeout, cfg.AI.RetryCount, cfg.AI.RequestTimeout)
 		}
 
 		conflictsByRepo, repoRoots, err := engine.FindConflicts(ctx, scanRoot)
@@ -117,15 +122,47 @@ var resolveCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	resolveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "API Key for the AI provider")
-	resolveCmd.Flags().StringVarP(&provider, "provider", "p", "gemini", "AI Provider (gemini, ollama, groq, openai)")
-	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (e.g., qwen2:1.5b, llama3, qwen2.5-coder)")
-	resolveCmd.Flags().StringVar(&baseURL, "url", "", "Custom base URL (e.g., http://localhost:11434/v1)")
+// buildAIConfigFromFlags assembles the shared AI configuration with the
+// documented precedence: explicitly-set CLI flags override environment
+// variables, which override provider defaults. Unset flags never mask env
+// configuration and no provider/model is ever switched silently.
+func buildAIConfigFromFlags(cmd *cobra.Command) ai.Config {
+	cfg := ai.ConfigFromEnv()
+	flags := cmd.Flags()
+	if flags.Changed("provider") {
+		cfg.Provider = provider
+	}
+	if flags.Changed("model") {
+		cfg.Model = modelName
+	}
+	if flags.Changed("url") {
+		cfg.BaseURL = baseURL
+	}
+	if flags.Changed("key") {
+		cfg.APIKey = apiKey
+	}
+	if flags.Changed("threshold") {
+		cfg.ConfidenceThreshold = threshold
+	}
+	if flags.Changed("retries") {
+		cfg.RetryCount = retries
+	}
+	if flags.Changed("ai-timeout") {
+		cfg.RequestTimeout = aiTimeout
+	}
+	return cfg
+}
 
-	resolveCmd.Flags().IntVarP(&threshold, "threshold", "t", 70, "Confidence threshold percentage")
+func init() {
+	resolveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "API Key for the AI provider (env: AI_API_KEY)")
+	resolveCmd.Flags().StringVarP(&provider, "provider", "p", "", "AI Provider (ollama, gemini, groq; env: AI_PROVIDER; default: ollama)")
+	resolveCmd.Flags().StringVarP(&modelName, "model", "m", "", "Specific model name (env: AI_MODEL; default: qwen2:1.5b for ollama)")
+	resolveCmd.Flags().StringVar(&baseURL, "url", "", "Custom base URL (env: AI_BASE_URL)")
+	resolveCmd.Flags().IntVarP(&threshold, "threshold", "t", ai.DefaultConfidenceThreshold, "Confidence threshold percentage (env: AI_CONFIDENCE_THRESHOLD)")
 	resolveCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 4, "Max concurrent files")
 	resolveCmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "Overall analysis timeout (must be > 0)")
+	resolveCmd.Flags().IntVar(&retries, "retries", ai.DefaultRetryCount, "Retries per AI request for transient failures (env: AI_RETRIES)")
+	resolveCmd.Flags().DurationVar(&aiTimeout, "ai-timeout", ai.DefaultRequestTimeout, "Per-request AI timeout (env: AI_TIMEOUT)")
 	resolveCmd.Flags().BoolVar(&debug, "debug", false, "Enable verbose resolve pipeline logging")
 	rootCmd.AddCommand(resolveCmd)
 }

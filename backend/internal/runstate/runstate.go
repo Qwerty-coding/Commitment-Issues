@@ -35,13 +35,59 @@ func FileKey(repoRoot, file string) string {
 	return repoRoot + "|" + file
 }
 
-// Suggestion is a run-scoped AI suggestion for a single collision. It is stored
-// on the Run rather than in a package-level cache so suggestions can never leak
-// across runs or repositories.
+// Suggestion is a run-scoped AI suggestion for a single collision. It is
+// stored on the Run rather than in a package-level cache so suggestions can
+// never leak across runs or repositories.
+//
+// Phase 2 added metadata additively (ID, Repository, CollisionKey, Provider,
+// Model, Status, ErrorCode, Retryable, timestamps); the original fields and
+// their JSON names are unchanged for backward compatibility.
 type Suggestion struct {
 	File       string                  `json:"file"`
 	Collision  semantic.DiffItem       `json:"collision"`
 	Resolution ai.AIResolutionResponse `json:"resolution"`
+
+	// ── Phase 2 additive metadata ────────────────────────────────────────
+	// ID is a stable suggestion identifier: <runID>/<repoKey>/<collisionKey>.
+	ID string `json:"id,omitempty"`
+	// Repository is the canonical repository root the suggestion belongs to.
+	Repository string `json:"repository,omitempty"`
+	// CollisionKey is the stable per-collision identity (DiffKey), used for
+	// dedupe and lookups independent of line numbers.
+	CollisionKey string `json:"collisionKey,omitempty"`
+	// Provider and Model record exactly which configuration produced the
+	// suggestion (visible in logs and response metadata).
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	// Status is one of "complete", "below_threshold", "failed".
+	Status string `json:"status,omitempty"`
+	// ErrorCode is the typed failure code when Status is "failed".
+	ErrorCode string `json:"errorCode,omitempty"`
+	// Retryable reports whether the API classified the failure as transient,
+	// so the frontend can offer a retry.
+	Retryable bool `json:"retryable,omitempty"`
+	// ErrorMessage carries a redacted, human-readable failure summary.
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	// StartedAt/CompletedAt bound the generation attempt (UTC).
+	StartedAt   time.Time `json:"startedAt,omitempty"`
+	CompletedAt time.Time `json:"completedAt,omitempty"`
+}
+
+// Suggestion status values.
+const (
+	// StatusComplete marks a successfully validated suggestion.
+	StatusComplete = "complete"
+	// StatusBelowThreshold marks a valid suggestion whose confidence is under
+	// the configured threshold; it is still returned to the caller.
+	StatusBelowThreshold = "below_threshold"
+	// StatusFailed marks a suggestion whose generation failed.
+	StatusFailed = "failed"
+)
+
+// SuggestionKey builds the run-unique lookup key for one suggestion:
+// repository root + file + stable collision identity.
+func SuggestionKey(repoRoot, file, collisionKey string) string {
+	return FileKey(repoRoot, file) + "|" + collisionKey
 }
 
 // RepositoryMetadata describes the repository a run is analysing.
@@ -62,6 +108,7 @@ type Run struct {
 	graphs       map[string]graph.CyGraph
 	reports      map[string][]byte
 	suggestions  map[string][]Suggestion
+	inFlight     map[string]struct{}
 	repositoryMD RepositoryMetadata
 }
 
@@ -84,6 +131,7 @@ func NewRunWithID(id string) *Run {
 		graphs:      make(map[string]graph.CyGraph),
 		reports:     make(map[string][]byte),
 		suggestions: make(map[string][]Suggestion),
+		inFlight:    make(map[string]struct{}),
 	}
 }
 
@@ -278,11 +326,43 @@ func (r *Run) DeleteReport(repoRoot, fileName string) {
 
 // ─── Suggestions ─────────────────────────────────────────────────────────────
 
-// SaveSuggestions stores the suggestions for a repository/file pair.
+// SaveSuggestions stores the suggestions for a repository/file pair. The list
+// is copied and sorted by collision key so enumeration is deterministic.
 func (r *Run) SaveSuggestions(repoRoot, fileName string, items []Suggestion) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.suggestions[FileKey(repoRoot, fileName)] = append([]Suggestion(nil), items...)
+	sorted := append([]Suggestion(nil), items...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].CollisionKey < sorted[j].CollisionKey
+	})
+	r.suggestions[FileKey(repoRoot, fileName)] = sorted
+}
+
+// SaveSuggestion upserts a single suggestion, keyed by repository + file +
+// collision identity, keeping the stored list deterministically ordered. It
+// replaces any prior entry for the same collision so repeated generation
+// never duplicates records.
+func (r *Run) SaveSuggestion(repoRoot string, item Suggestion) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fileKey := FileKey(repoRoot, item.File)
+	items := r.suggestions[fileKey]
+
+	replaced := false
+	for i := range items {
+		if items[i].CollisionKey == item.CollisionKey {
+			items[i] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		items = append(items, item)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CollisionKey < items[j].CollisionKey
+	})
+	r.suggestions[fileKey] = items
 }
 
 // GetSuggestions returns the suggestions for a repository/file pair.
@@ -294,4 +374,42 @@ func (r *Run) GetSuggestions(repoRoot, fileName string) ([]Suggestion, bool) {
 		return nil, false
 	}
 	return append([]Suggestion(nil), items...), true
+}
+
+// FindSuggestion locates one stored suggestion by repository + file +
+// collision identity. It is the dedupe lookup for the suggestion service.
+func (r *Run) FindSuggestion(repoRoot, fileName, collisionKey string) (Suggestion, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items, ok := r.suggestions[FileKey(repoRoot, fileName)]
+	if !ok {
+		return Suggestion{}, false
+	}
+	for _, item := range items {
+		if item.CollisionKey == collisionKey {
+			return item, true
+		}
+	}
+	return Suggestion{}, false
+}
+
+// TryBeginSuggestion atomically registers an in-flight generation for the
+// given run-unique suggestion key. It reports false when a generation for
+// the same run/repository/file/collision identity is already in progress,
+// which prevents duplicate network requests. Always pair with EndSuggestion.
+func (r *Run) TryBeginSuggestion(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, busy := r.inFlight[key]; busy {
+		return false
+	}
+	r.inFlight[key] = struct{}{}
+	return true
+}
+
+// EndSuggestion releases an in-flight generation registration.
+func (r *Run) EndSuggestion(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.inFlight, key)
 }
