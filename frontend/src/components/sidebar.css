@@ -34,6 +34,31 @@
     text-decoration:none
 }
 
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 2px 0;
+
+    color: white;
+    text-decoration: none;
+    font-size: 15px;
+
+    border: none;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+}
+
+.sidebar-link:hover {
+    color: #e9e4f7;
+}
+
+.sidebar-link.active {
+    font-weight: 700;
+    color: #c4b5fd;
+}
+
 .sidebar li:hover {
     background-color: #343a40;
 }

@@ -15,6 +15,7 @@ import (
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
+	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
 )
@@ -242,11 +243,13 @@ func TestGenerate_BoundedConcurrency(t *testing.T) {
 func TestGenerate_PartialFailurePreservesSuccesses(t *testing.T) {
 	f := newFakeOllama(t, "qwen2:1.5b")
 	f.respond = func(body map[string]any) (int, string) {
-		// Fail the collision named "two" with a retryable 503.
+		// Fail the collision named "two" with a retryable 503. Match on the
+		// identity fragment, which is present in both the JSON and the default
+		// TOON payload encodings (the name is quoted only under JSON).
 		messages, _ := body["messages"].([]any)
 		if len(messages) > 1 {
 			if msg, ok := messages[1].(map[string]any); ok {
-				if content, ok := msg["content"].(string); ok && strings.Contains(content, `"two"`) {
+				if content, ok := msg["content"].(string); ok && strings.Contains(content, "Function|two") {
 					return http.StatusServiceUnavailable, "busy"
 				}
 			}
@@ -559,3 +562,61 @@ func TestGenerate_UnknownAnalysisHistoryEntryIgnored(t *testing.T) {
 		t.Errorf("history must not fabricate entries, got %d", history.Len())
 	}
 }
+
+func TestGenerate_UnresolvedRegionMapping_SetsManualReview(t *testing.T) {
+	f := newFakeOllama(t, "qwen2:1.5b")
+	run := runstate.NewRun()
+	// seedRun registers an analysis WITHOUT any ConflictRegions.
+	// Therefore git.MatchConflictRegion fails to match, leaving RegionID empty.
+	seedRun(t, run, "/repo", map[string][]string{"mapped.js": {"collision1"}})
+
+	gen := &Generator{Cfg: f.config("qwen2:1.5b")}
+	result, err := gen.GenerateForFile(context.Background(), run, "/repo", "mapped.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion, got %d", len(result.Suggestions))
+	}
+	sug := result.Suggestions[0]
+	if sug.ResolutionID == "" {
+		t.Fatalf("expected resolution to be created")
+	}
+	res, ok := run.GetResolution(sug.ResolutionID)
+	if !ok {
+		t.Fatalf("resolution %s not found in run", sug.ResolutionID)
+	}
+	// Verify resolution is marked manual_review, NOT proposed (cannot be auto-applied)
+	if res.Status != resolutions.StatusManualReview {
+		t.Errorf("expected resolution status %s, got %s", resolutions.StatusManualReview, res.Status)
+	}
+}
+
+func TestGenerate_UnsupportedLanguage_SetsManualReview(t *testing.T) {
+	f := newFakeOllama(t, "qwen2:1.5b")
+	run := runstate.NewRun()
+	// File with unknown extension (.xyz)
+	seedRun(t, run, "/repo", map[string][]string{"unsupported.xyz": {"collision1"}})
+
+	gen := &Generator{Cfg: f.config("qwen2:1.5b")}
+	result, err := gen.GenerateForFile(context.Background(), run, "/repo", "unsupported.xyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion, got %d", len(result.Suggestions))
+	}
+	sug := result.Suggestions[0]
+	if sug.ResolutionID == "" {
+		t.Fatalf("expected resolution to be created")
+	}
+	res, ok := run.GetResolution(sug.ResolutionID)
+	if !ok {
+		t.Fatalf("resolution %s not found in run", sug.ResolutionID)
+	}
+	// Unsupported language must be marked manual_review
+	if res.Status != resolutions.StatusManualReview {
+		t.Errorf("expected resolution status %s for unsupported language, got %s", resolutions.StatusManualReview, res.Status)
+	}
+}
+

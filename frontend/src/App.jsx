@@ -7,6 +7,8 @@ import Treediff from './tabs/treediff'
 import Suggestions from './tabs/suggestions'
 import Commitgraph from './tabs/commitgraph'
 import History from './tabs/history'
+import AIContext from './tabs/aicontext'
+import Compare from './tabs/compare'
 
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useState } from 'react'
@@ -33,8 +35,11 @@ function App() {
             <Route path="/treediff" element={<Treediff />} />
             <Route path="/commitgraph" element={<Commitgraph />} />
             <Route path="/history" element={<History />} />
+            <Route path="/context" element={<AIContext />} />
+            <Route path="/compare" element={<Compare />} />
           </Routes>
         </div>
+
       </div>
     </BrowserRouter>
   )

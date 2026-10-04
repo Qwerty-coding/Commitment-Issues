@@ -1,9 +1,18 @@
 import "./sidebar.css"
-import {useNavigate} from "react-router-dom"
+import { NavLink } from 'react-router-dom'
+
+const links = [
+    { to: '/', label: 'Dashboard', icon: 'fa-solid fa-house', end: true },
+    { to: '/conflicts', label: 'Conflicts', icon: 'fa-solid fa-triangle-exclamation' },
+    { to: '/treediff', label: 'TreeDiff', icon: 'fa-solid fa-code-compare' },
+    { to: '/suggestions', label: 'Suggestions', icon: 'fa-solid fa-wand-magic-sparkles' },
+    { to: '/commitgraph', label: 'Commit Graph', icon: 'fa-solid fa-code-branch' },
+    { to: '/compare', label: 'Compare', icon: 'fa-solid fa-scale-balanced' },
+    { to: '/context', label: 'AI Context', icon: 'fa-solid fa-file-lines' },
+    { to: '/history', label: 'History', icon: 'fa-solid fa-clock-rotate-left' },
+]
 
 function Sidebar(){
-    const navigate = useNavigate();
-
     return(
     <div className="sidebar">
         <div className="sidebar-title">
@@ -11,47 +20,18 @@ function Sidebar(){
         </div>
 
         <ul>
-            <li>
-                <div onClick={()=>{navigate("/")}}>
-                    <i className="fa-solid fa-house"></i>
-                    Dashboard
-                </div>
-            </li>
-
-            <li>
-                <div onClick={()=>{navigate("/conflicts")}}>
-                    <i className="fa-solid fa-triangle-exclamation"></i>
-                    Conflicts
-                </div>
-            </li>
-
-            <li>
-                <div onClick={()=>{navigate("/treediff")}}>
-                    <i className="fa-solid fa-code-compare"></i>
-                    TreeDiff
-                </div>
-            </li>
-
-            <li>
-                <div onClick={()=>{navigate("/suggestions")}}>
-                    <i className="fa-solid fa-wand-magic-sparkles"></i>
-                    Suggestions
-                </div>
-            </li>
-
-            <li>
-                <div onClick={()=>{navigate("/commitgraph")}}>
-                    <i className="fa-solid fa-code-branch"></i>
-                    Commit Graph
-                </div>
-            </li>
-
-            <li>
-                <div onClick={()=>{navigate("/history")}}>
-                    <i className="fa-solid fa-clock-rotate-left"></i>
-                    History
-                </div>
-            </li>
+            {links.map((link) => (
+                <li key={link.to}>
+                    <NavLink
+                        to={link.to}
+                        end={link.end}
+                        className={({isActive}) => `sidebar-link${isActive ? ' active' : ''}`}
+                    >
+                        <i className={link.icon}></i>
+                        {link.label}
+                    </NavLink>
+                </li>
+            ))}
         </ul>
     </div>
     )

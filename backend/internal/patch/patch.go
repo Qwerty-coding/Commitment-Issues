@@ -20,6 +20,7 @@ import (
 	promptcontext "CommitIssues/internal/context"
 	"CommitIssues/internal/fileutil"
 	git "CommitIssues/internal/git"
+	parser "CommitIssues/internal/parser"
 	"CommitIssues/internal/resolutions"
 )
 
@@ -57,6 +58,9 @@ type PreviewResult struct {
 	OriginalContent string
 	// RegionIndex is the 0-based index of the replaced conflict region.
 	RegionIndex int
+	// RequiresManualReview indicates the patch targets an unsupported language
+	// or requires manual inspection.
+	RequiresManualReview bool
 }
 
 // Build constructs a read-only unified diff and proposed file content for the
@@ -117,14 +121,60 @@ func Build(
 		return PreviewResult{}, err
 	}
 
-	// 6. Build a unified diff (read-only, informational).
+	// 6. Verify all other conflict regions are preserved byte-for-byte.
+	origLines := strings.Split(originalContent, "\n")
+	for _, other := range analysis.ConflictRegions {
+		if other.Index == region.Index {
+			continue
+		}
+		if other.StartLine >= 1 && other.EndLine <= len(origLines) {
+			otherLines := origLines[other.StartLine-1 : other.EndLine]
+			otherText := strings.Join(otherLines, "\n")
+			if !strings.Contains(proposed, otherText) {
+				return PreviewResult{}, &PatchError{
+					Code:    resolutions.CodeInvalidPatch,
+					Message: fmt.Sprintf("patch modified or corrupted other conflict region %d", other.Index),
+				}
+			}
+		}
+	}
+
+	// 7. Parse proposed result for supported languages. Unsupported languages
+	//    are marked as requiring manual review.
+	isSupported := parser.IsSupportedLanguage(res.File)
+	if isSupported {
+		toCheck := proposed
+		// In multi-region conflict files, untouched conflict regions still contain
+		// conflict markers (<<<<<<<, =======, >>>>>>>). For syntax checking of the
+		// proposed change in context, temporarily collapse other conflict regions to
+		// their "Ours" content so tree-sitter doesn't flag other regions' conflict markers.
+		for _, other := range analysis.ConflictRegions {
+			if other.Index == region.Index {
+				continue
+			}
+			if other.StartLine >= 1 && other.EndLine <= len(origLines) {
+				otherLines := origLines[other.StartLine-1 : other.EndLine]
+				markerBlock := strings.Join(otherLines, "\n")
+				toCheck = strings.Replace(toCheck, markerBlock, other.Ours, 1)
+			}
+		}
+		if err := parser.ParseAndCheckSyntax(res.File, []byte(toCheck)); err != nil {
+			return PreviewResult{}, &PatchError{
+				Code:    resolutions.CodeInvalidPatch,
+				Message: fmt.Sprintf("proposed patch introduces syntax error: %v", err),
+			}
+		}
+	}
+
+	// 8. Build a unified diff (read-only, informational).
 	diff := buildUnifiedDiff(res.File, originalContent, proposed)
 
 	return PreviewResult{
-		ProposedContent: proposed,
-		UnifiedDiff:     diff,
-		OriginalContent: originalContent,
-		RegionIndex:     region.Index,
+		ProposedContent:      proposed,
+		UnifiedDiff:          diff,
+		OriginalContent:      originalContent,
+		RegionIndex:          region.Index,
+		RequiresManualReview: !isSupported,
 	}, nil
 }
 
@@ -161,11 +211,29 @@ func findRegion(regions []git.ConflictRegion, regionID string) (git.ConflictRegi
 // Returns ErrInvalidPatch when the line range is out of bounds or the region
 // no longer contains the expected markers.
 func applyRegionReplacement(originalContent string, region git.ConflictRegion, replacement string) (string, error) {
+	// Reject malformed replacements containing conflict markers.
+	if strings.Contains(replacement, "<<<<<<<") || strings.Contains(replacement, "=======") || strings.Contains(replacement, ">>>>>>>") {
+		return "", &PatchError{
+			Code:    resolutions.CodeInvalidPatch,
+			Message: "replacement contains unresolved conflict markers",
+		}
+	}
+
 	lines := strings.Split(originalContent, "\n")
 	// Preserve trailing newline behavior.
 	trailingNewline := len(lines) > 0 && lines[len(lines)-1] == ""
 	if trailingNewline {
 		lines = lines[:len(lines)-1]
+	}
+
+	// Reject whole-file replacements when file has content outside conflict region.
+	if len(lines) > (region.EndLine - region.StartLine + 1) {
+		if strings.TrimSpace(replacement) == strings.TrimSpace(originalContent) {
+			return "", &PatchError{
+				Code:    resolutions.CodeInvalidPatch,
+				Message: "replacement is a whole-file replacement instead of targeting the conflict region",
+			}
+		}
 	}
 
 	// Validate bounds (1-based).

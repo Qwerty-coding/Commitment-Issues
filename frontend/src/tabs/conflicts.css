@@ -1,8 +1,8 @@
 .conflicts-page {
   width: 100%;
-  min-height: calc(100vh - 60px);
-  padding: 45px;
-  background-color: #f8f9fa;
+  min-height: calc(100vh - var(--navbar-height, 56px));
+  padding: 28px;
+  background-color: var(--bg, #f8f9fa);
 }
 
 .conflict-grid {

@@ -47,6 +47,9 @@ type Config struct {
 	// path) that may be executed. An empty allow-list means validation is
 	// disabled; the runner returns StatusNotRun immediately.
 	AllowList []string
+	// Command is the specific command name and args to execute for post-apply
+	// validation. If empty, AllowList[0] is used.
+	Command []string
 	// WorkDir is the directory in which the command runs. If empty, the
 	// repository root is used. The runner rejects any WorkDir outside the
 	// repository root.
@@ -63,6 +66,38 @@ type Config struct {
 	// Env is the explicit environment for the command. If nil, a sanitized
 	// minimal environment is used (PATH only, no HOME, USER, etc.).
 	Env []string
+}
+
+// ConfigFromEnv builds a Config from environment variables:
+// - VALIDATION_ALLOWLIST (comma or space separated)
+// - VALIDATION_COMMAND (whitespace separated command and args)
+// - VALIDATION_TIMEOUT (e.g. 30s)
+// - VALIDATION_OUTPUT_LIMIT (in bytes)
+func ConfigFromEnv() Config {
+	cfg := Config{}
+	if raw := strings.TrimSpace(os.Getenv("VALIDATION_ALLOWLIST")); raw != "" {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+			p := strings.TrimSpace(part)
+			if p != "" {
+				cfg.AllowList = append(cfg.AllowList, p)
+			}
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("VALIDATION_COMMAND")); raw != "" {
+		cfg.Command = strings.Fields(raw)
+	}
+	if raw := strings.TrimSpace(os.Getenv("VALIDATION_TIMEOUT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			cfg.Timeout = d
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("VALIDATION_OUTPUT_LIMIT")); raw != "" {
+		var limit int
+		if _, err := fmt.Sscanf(raw, "%d", &limit); err == nil && limit > 0 {
+			cfg.OutputLimit = limit
+		}
+	}
+	return cfg
 }
 
 // Result is the outcome of one validation run.

@@ -7,9 +7,10 @@ function Navbar({ toggleSidebar }) {
     const [repoName, setRepoName] = useState("");
     const [currentBranch, setCurrentBranch] = useState("");
 
-
     useEffect(() => {
-        fetch(`${API_BASE}/api/repository`)
+        const controller = new AbortController()
+
+        fetch(`${API_BASE}/api/repository`, { signal: controller.signal })
             .then((response) => response.json())
             .then((payload) => {
                 const data = payload?.data || {}
@@ -17,24 +18,32 @@ function Navbar({ toggleSidebar }) {
                 setCurrentBranch(data.currentBranch || "")
             })
             .catch((error) => {
+                if (error.name === 'AbortError') return
                 console.log("Error fetching repository metadata", error)
             })
+
+        return () => controller.abort()
     }, [])
 
     return (
         <nav className="navbar bg-dark navbar-expand-lg sticky-top">
             <div className="container-fluid">
-                <span style={{ color: 'white' }} onClick={toggleSidebar}>
+                <button
+                    type="button"
+                    className="navbar-brand navbar-toggle"
+                    onClick={toggleSidebar}
+                    aria-label="Toggle sidebar"
+                >
                     <i className="fa-solid fa-code-pull-request"></i> MergeSolver
-                </span>
+                </button>
                 <div className="subpart-div">
                     <ul className="navbar-nav subpart">
                         <li className="nav-item sidebar-item">
-                            <a className="nav-link active" aria-current="page" href="#" style={{ color: 'white' }}><i className="fa-regular fa-folder"></i> {repoName || 'Repository'}</a>
+                            <span className="nav-link active" aria-current="page" style={{ color: 'white' }}><i className="fa-regular fa-folder"></i> {repoName || 'Repository'}</span>
                             <span className="tooltip">Repository</span>
                         </li>
                         <li className="nav-item sidebar-item">
-                            <a className="nav-link active" aria-current="page" href="#" style={{ color: 'white' }}><i className="fa-solid fa-arrows-split-up-and-left"></i> {currentBranch || 'branch'}</a>
+                            <span className="nav-link active" aria-current="page" style={{ color: 'white' }}><i className="fa-solid fa-arrows-split-up-and-left"></i> {currentBranch || 'branch'}</span>
                             <span className="tooltip">Branch</span>
                         </li>
                     </ul>

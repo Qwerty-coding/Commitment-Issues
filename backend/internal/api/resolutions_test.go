@@ -17,6 +17,7 @@ import (
 	git "CommitIssues/internal/git"
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
+	semantic "CommitIssues/internal/semantic"
 )
 
 func setupTestServerWithConflict(t *testing.T, filename, content string) (string, *runstate.Run, http.Handler, promptcontext.FileAnalysis) {
@@ -386,3 +387,230 @@ func TestAPI_AnalysisRefresh(t *testing.T) {
 		t.Errorf("analysis hash not updated: %s", updatedAnalysis.ContentHash)
 	}
 }
+
+func TestAPI_EndToEnd_SuggestionsToRevert(t *testing.T) {
+	fakeSrv := fakeOllama(t, func() (int, string) {
+		return http.StatusOK, `{"explanation":"Merged greetings","suggested_code":"  return \"hello merged\";\n","confidence_score":90}`
+	})
+	useOllamaEnv(t, fakeSrv.URL + "/v1")
+
+	content := "function greet() {\n<<<<<<< ours\n  return \"hello from ours\";\n=======\n  return \"hello from theirs\";\n>>>>>>> theirs\n}\n"
+	repo, run, handler, analysis := setupTestServerWithConflict(t, "greet.js", content)
+
+	// Set up collision matching the conflict region
+	collision := semantic.DiffItem{
+		Type:         "COLLISION",
+		Kind:         "Function",
+		Name:         "greet",
+		Line:         3,
+		File:         "greet.js",
+		Identity:     "greet.js||Function|greet|()",
+		OurContent:   "  return \"hello from ours\";\n",
+		TheirContent: "  return \"hello from theirs\";\n",
+	}
+	analysis.SmartDiff.Collisions = []semantic.DiffItem{collision}
+	analysis.PromptContext = promptcontext.PromptContextIR{
+		RepositorySummary: "repo: " + repo,
+	}
+	run.RegisterAnalysis(repo, analysis)
+
+	// Step 1: GET /api/suggestions?file=greet.js
+	reqSug := httptest.NewRequest(http.MethodGet, "/api/suggestions?file=greet.js", nil)
+	recSug := httptest.NewRecorder()
+	handler.ServeHTTP(recSug, reqSug)
+	if recSug.Code != http.StatusOK {
+		t.Fatalf("suggestions request failed: %d: %s", recSug.Code, recSug.Body.String())
+	}
+	var sugResp struct {
+		Success bool                  `json:"success"`
+		Data    []runstate.Suggestion `json:"data"`
+	}
+	if err := json.NewDecoder(recSug.Body).Decode(&sugResp); err != nil {
+		t.Fatalf("decode suggestions response: %v", err)
+	}
+	if len(sugResp.Data) == 0 {
+		t.Fatalf("expected at least 1 suggestion, got 0")
+	}
+	resID := sugResp.Data[0].ResolutionID
+	if resID == "" {
+		t.Fatalf("expected resolutionId to be non-empty on generated suggestion: %+v", sugResp.Data[0])
+	}
+
+	// Step 2: POST /api/resolutions/{id}/preview
+	recPreview := doPostJSON(t, handler, "/api/resolutions/"+resID+"/preview", map[string]any{
+		"resolutionId":       resID,
+		"repositoryRoot":     repo,
+		"file":               "greet.js",
+		"suggestionRevision": 1,
+	})
+	if recPreview.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d: %s", recPreview.Code, recPreview.Body.String())
+	}
+	var previewResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Status      string `json:"status"`
+			PreviewDiff string `json:"previewDiff"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(recPreview.Body).Decode(&previewResp); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if previewResp.Data.Status != resolutions.StatusPreviewed {
+		t.Errorf("status = %q, want previewed", previewResp.Data.Status)
+	}
+	if !strings.Contains(previewResp.Data.PreviewDiff, "hello merged") {
+		t.Errorf("preview diff missing replacement: %s", previewResp.Data.PreviewDiff)
+	}
+
+	// Step 3: POST /api/resolutions/{id}/approve
+	recApprove := doPostJSON(t, handler, "/api/resolutions/"+resID+"/approve", map[string]any{
+		"resolutionId":       resID,
+		"repositoryRoot":     repo,
+		"file":               "greet.js",
+		"suggestionRevision": 1,
+	})
+	if recApprove.Code != http.StatusOK {
+		t.Fatalf("approve failed: %d: %s", recApprove.Code, recApprove.Body.String())
+	}
+	var approveResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Status         string `json:"status"`
+			ApprovalStatus string `json:"approvalStatus"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(recApprove.Body).Decode(&approveResp); err != nil {
+		t.Fatalf("decode approve response: %v", err)
+	}
+	if approveResp.Data.Status != resolutions.StatusApproved {
+		t.Errorf("status = %q, want approved", approveResp.Data.Status)
+	}
+
+	// Step 4: POST /api/resolutions/{id}/apply
+	recApply := doPostJSON(t, handler, "/api/resolutions/"+resID+"/apply", map[string]any{
+		"resolutionId":       resID,
+		"repositoryRoot":     repo,
+		"file":               "greet.js",
+		"suggestionRevision": 1,
+	})
+	if recApply.Code != http.StatusOK {
+		t.Fatalf("apply failed: %d: %s", recApply.Code, recApply.Body.String())
+	}
+	diskApplied, err := os.ReadFile(filepath.Join(repo, "greet.js"))
+	if err != nil {
+		t.Fatalf("read disk file after apply: %v", err)
+	}
+	if !strings.Contains(string(diskApplied), "hello merged") {
+		t.Errorf("disk file did not receive replacement: %s", string(diskApplied))
+	}
+	if strings.Contains(string(diskApplied), "<<<<<<<") {
+		t.Errorf("disk file still contains conflict markers: %s", string(diskApplied))
+	}
+
+	// Step 5: POST /api/resolutions/{id}/revert (using server-side snapshot, no preApplyContent)
+	recRevert := doPostJSON(t, handler, "/api/resolutions/"+resID+"/revert", map[string]any{
+		"resolutionId":   resID,
+		"repositoryRoot": repo,
+		"file":           "greet.js",
+	})
+	if recRevert.Code != http.StatusOK {
+		t.Fatalf("revert failed: %d: %s", recRevert.Code, recRevert.Body.String())
+	}
+	diskReverted, err := os.ReadFile(filepath.Join(repo, "greet.js"))
+	if err != nil {
+		t.Fatalf("read disk file after revert: %v", err)
+	}
+	if string(diskReverted) != content {
+		t.Errorf("disk file not restored: got %q, want %q", string(diskReverted), content)
+	}
+
+	// Step 6: GET /api/resolutions/{id}/validation -> verify audit events
+	reqAudit := httptest.NewRequest(http.MethodGet, "/api/resolutions/"+resID+"/validation", nil)
+	recAudit := httptest.NewRecorder()
+	handler.ServeHTTP(recAudit, reqAudit)
+	if recAudit.Code != http.StatusOK {
+		t.Fatalf("audit request failed: %d: %s", recAudit.Code, recAudit.Body.String())
+	}
+	var auditResp struct {
+		Success bool                          `json:"success"`
+		Data    []resolutions.ResolutionEvent `json:"data"`
+	}
+	if err := json.NewDecoder(recAudit.Body).Decode(&auditResp); err != nil {
+		t.Fatalf("decode audit response: %v", err)
+	}
+	if len(auditResp.Data) == 0 {
+		t.Fatalf("expected audit events, got 0")
+	}
+	var eventTypes []string
+	for _, ev := range auditResp.Data {
+		eventTypes = append(eventTypes, ev.Type)
+	}
+	expectedSequence := []string{
+		resolutions.EventPreviewed,
+		resolutions.EventApproved,
+		resolutions.EventApplied,
+		resolutions.EventReverted,
+	}
+	for _, expectedType := range expectedSequence {
+		found := false
+		for _, actualType := range eventTypes {
+			if actualType == expectedType {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("audit trail missing event %q in %v", expectedType, eventTypes)
+		}
+	}
+}
+
+func TestAPI_CreateResolution_Proposal(t *testing.T) {
+	content := "<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, _, handler, _ := setupTestServerWithConflict(t, "calc.js", content)
+
+	// POST /api/resolutions to propose a resolution
+	recCreate := doPostJSON(t, handler, "/api/resolutions", map[string]any{
+		"repositoryRoot": repo,
+		"file":           "calc.js",
+		"collisionKey":   "col-1",
+		"revision":       1,
+		"regionId":       "0",
+		"replacement":    "fn_proposed();\n",
+	})
+	if recCreate.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", recCreate.Code, recCreate.Body.String())
+	}
+	var createResp struct {
+		Success bool                   `json:"success"`
+		Data    resolutions.Resolution `json:"data"`
+	}
+	if err := json.NewDecoder(recCreate.Body).Decode(&createResp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if createResp.Data.ID == "" {
+		t.Fatalf("expected resolution ID, got empty")
+	}
+	if createResp.Data.Status != resolutions.StatusProposed {
+		t.Errorf("status = %q, want proposed", createResp.Data.Status)
+	}
+
+	// Verify GET /api/resolutions/{id} retrieves the created proposal
+	recGet := doGet(t, handler, "/api/resolutions/"+createResp.Data.ID)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("get resolution failed: %d", recGet.Code)
+	}
+
+	// Verify preview works on the proposed resolution
+	recPrev := doPostJSON(t, handler, "/api/resolutions/"+createResp.Data.ID+"/preview", map[string]any{
+		"resolutionId":       createResp.Data.ID,
+		"repositoryRoot":     repo,
+		"file":               "calc.js",
+		"suggestionRevision": 1,
+	})
+	if recPrev.Code != http.StatusOK {
+		t.Fatalf("preview failed on proposed resolution: %d: %s", recPrev.Code, recPrev.Body.String())
+	}
+}
+

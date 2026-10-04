@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ai "CommitIssues/internal/ai"
+	"CommitIssues/internal/cache"
 	promptcontext "CommitIssues/internal/context"
 	"CommitIssues/internal/fileutil"
 	git "CommitIssues/internal/git"
@@ -23,10 +24,7 @@ import (
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
-
-	sitter "github.com/smacker/go-tree-sitter"
 )
-
 
 // FileOutcome is the result of processing a single conflicted file. Errors are
 // always structured (see *FileError) so a single bad file cannot terminate the
@@ -189,6 +187,27 @@ func ProcessRepository(ctx context.Context, run *runstate.Run, repoRoot string, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// One AST cache per run: incremental reuse within the run, no shared
+	// state across runs. Config is passed by value, so this stays local.
+	if cfg.ASTCache == nil {
+		cfg.ASTCache = cache.NewDefault()
+	}
+
+	// Load the README once per repository before the worker pool so every
+	// file in this repo sees the same excerpt without redundant I/O.
+	// Missing README and disabled config both produce an empty string — no
+	// README section is rendered and the prompt budget is unaffected.
+	if run != nil && cfg.ReadmeContext {
+		excerpt, _, readmeErr := promptcontext.LoadReadmeContext(repoRoot, cfg.ReadmeMaxBytes)
+		if readmeErr != nil {
+			debugPrintf("[analyze] repo %s: README load error (non-fatal): %v\n", repoRoot, readmeErr)
+		}
+		run.RegisterReadme(repoRoot, excerpt)
+	} else if run != nil {
+		// Feature disabled: register an empty excerpt so workers can read
+		// consistently via run.Readme() without a missing-key branch.
+		run.RegisterReadme(repoRoot, "")
+	}
 
 	files := append([]string(nil), conflictedFiles...)
 	sort.Strings(files)
@@ -243,6 +262,7 @@ func ProcessRepository(ctx context.Context, run *runstate.Run, repoRoot string, 
 	return result, nil
 }
 
+
 // ProcessConflictFile runs AST extraction, semantic diff, graphing and
 // optionally AI resolution for a single conflicted file.
 func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targetFile string, cfg Config, runAI bool) FileOutcome {
@@ -272,53 +292,44 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 		targetFile, formatDuration(time.Since(start)), conflictData.Source, len(conflictData.Regions))
 	fmt.Fprintln(&buf, "Successfully extracted Base, Ours, and Theirs code.")
 
-	jsParser := sitter.NewParser()
-	jsParser.SetLanguage(parser.GetLanguageForFile(targetFile))
-
-	parseSide := func(label string, raw string) (*sitter.Tree, []byte, error) {
-		source := parser.NormalizeUTF8([]byte(raw))
-		tree, parseErr := jsParser.ParseCtx(ctx, nil, source)
-		if parseErr != nil {
-			return nil, source, parseErr
-		}
-		if tree == nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, source, ctxErr
-			}
-			return nil, source, fmt.Errorf("failed to parse %s version into AST", label)
-		}
-		return tree, source, nil
-	}
-
-	ourTree, ourSourceCode, err := parseSide("OUR", conflictData.OurVersion)
-	if err != nil {
-		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
-	}
-	theirTree, theirSourceCode, err := parseSide("THEIR", conflictData.TheirVersion)
-	if err != nil {
-		return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
-	}
-	baseTree, baseSourceCode, err := parseSide("BASE", conflictData.BaseVersion)
-	if err != nil {
-		// A missing/failed base version is not fatal: base may legitimately be
-		// empty for add/add style conflicts.
-		debugPrintf("[analyze] file %s: base parse skipped: %v\n", targetFile, err)
-		baseTree = nil
-	}
-	debugPrintf("[analyze] file %s: parsed ASTs in %s\n", targetFile, formatDuration(time.Since(start)))
-
+	lang := parser.GetLanguageForFile(targetFile)
 	baseASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
-	if baseTree != nil {
-		parser.ExtractDataForFile(baseTree.RootNode(), baseSourceCode, targetFile, &baseASTData)
+	ourASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
+	theirASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
+
+	// Defensive fallback for direct callers bypassing ProcessRepository:
+	// a per-call cache, never a package-global one.
+	astCache := cfg.ASTCache
+	if astCache == nil {
+		astCache = cache.NewDefault()
 	}
 
-	ourASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
-	parser.ExtractDataForFile(ourTree.RootNode(), ourSourceCode, targetFile, &ourASTData)
-	report.PrintASTContext(&buf, "OUR", ourASTData)
+	if lang != nil {
+		var err error
+		ourASTData, _, err = astCache.GetOrParse(ctx, repoRoot, targetFile, []byte(conflictData.OurVersion))
+		if err != nil {
+			return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
+		}
+		theirASTData, _, err = astCache.GetOrParse(ctx, repoRoot, targetFile, []byte(conflictData.TheirVersion))
+		if err != nil {
+			return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeFileParse, Err: err}}
+		}
+		if conflictData.BaseVersion != "" {
+			baseASTData, _, err = astCache.GetOrParse(ctx, repoRoot, targetFile, []byte(conflictData.BaseVersion))
+			if err != nil {
+				// A missing/failed base version is not fatal: base may legitimately be
+				// empty for add/add style conflicts.
+				debugPrintf("[analyze] file %s: base parse skipped: %v\n", targetFile, err)
+			}
+		}
+		debugPrintf("[analyze] file %s: parsed ASTs in %s\n", targetFile, formatDuration(time.Since(start)))
 
-	theirASTData := parser.ASTContext{Functions: []parser.CodeElement{}, Variables: []parser.CodeElement{}}
-	parser.ExtractDataForFile(theirTree.RootNode(), theirSourceCode, targetFile, &theirASTData)
-	report.PrintASTContext(&buf, "THEIR", theirASTData)
+		report.PrintASTContext(&buf, "OUR", ourASTData)
+		report.PrintASTContext(&buf, "THEIR", theirASTData)
+	} else {
+		debugPrintf("[analyze] file %s: unsupported language, using text fallback\n", targetFile)
+		fmt.Fprintf(&buf, "File %s has unsupported language grammar; using text fallback.\n", targetFile)
+	}
 
 	smartDiff, err := semantic.GenerateSmartDiffContext(ctx, baseASTData, ourASTData, theirASTData)
 	if err != nil {
@@ -334,17 +345,21 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 
 	promptCtx := promptcontext.BuildPromptContext(
 		fmt.Sprintf("Repository root: %s", repoRoot),
+		readmeExcerpt(run, repoRoot),
 		[]string{conflictData.FileName},
 		conflictScope,
 		ourASTData,
 		theirASTData,
 	)
+	// Soft prompt budget: trim auxiliary context (README → functions →
+	// variables) without ever touching the collision payload.
+	promptCtx = promptcontext.ApplyTargetBudget(promptCtx, cfg.AITargetPromptTokens)
 
 	payload := prompt.AIRequestPayload{
 		FileName:     conflictData.FileName,
-		BaseCode:     string(baseSourceCode),
-		OurCode:      string(ourSourceCode),
-		TheirCode:    string(theirSourceCode),
+		BaseCode:     conflictData.BaseVersion,
+		OurCode:      conflictData.OurVersion,
+		TheirCode:    conflictData.TheirVersion,
 		OurASTData:   ourASTData,
 		TheirASTData: theirASTData,
 		SmartDiff:    smartDiff,
@@ -402,7 +417,6 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 		})
 	}
 
-
 	var reportPath string
 	if jsonBytes != nil && run != nil {
 		reportPath = run.SaveReport(repoRoot, conflictData.FileName, jsonBytes)
@@ -421,12 +435,10 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 			return FileOutcome{File: targetFile, Output: buf.String(), Err: &FileError{File: targetFile, ErrCode: CodeInternal, Err: err}}
 		}
 
-		// After AI resolution, release the cached report to free memory.
-		if run != nil && reportPath != "" {
-			run.DeleteReport(repoRoot, conflictData.FileName)
-			reportPath = ""
-			debugPrintf("[analyze] file %s: deleted cached report for %s\n", targetFile, conflictData.FileName)
-		}
+		// The cached report is intentionally retained after AI resolution: it
+		// is part of the run's audit trail (suggestions and resolutions
+		// reference the analysis snapshot). Reports are run-scoped and bounded
+		// by the number of conflicted files in the run.
 	}
 
 	debugPrintf("[analyze] file %s: finished in %s\n", targetFile, formatDuration(time.Since(start)))
@@ -598,3 +610,15 @@ func runID(run *runstate.Run) string {
 	}
 	return run.ID
 }
+
+// readmeExcerpt retrieves the README excerpt registered for a repository by
+// ProcessRepository. Returns an empty string when run is nil (direct test
+// callers that bypass ProcessRepository) or when no excerpt was stored.
+func readmeExcerpt(run *runstate.Run, repoRoot string) string {
+	if run == nil {
+		return ""
+	}
+	excerpt, _ := run.Readme(repoRoot)
+	return excerpt
+}
+

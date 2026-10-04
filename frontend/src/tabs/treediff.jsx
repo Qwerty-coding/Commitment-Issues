@@ -14,9 +14,10 @@ function Treediff() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    const controller = new AbortController()
     const url = file ? `${API_BASE}/api/analysis?file=${encodeURIComponent(file)}` : `${API_BASE}/api/analysis`
 
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         if (!payload?.success) {
@@ -26,10 +27,15 @@ function Treediff() {
         setAnalyses(data)
       })
       .catch((err) => {
+        if (err.name === 'AbortError') return
         console.error('Error loading TreeDiff:', err)
         setError(err.message)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
   }, [file])
 
   if (loading) {

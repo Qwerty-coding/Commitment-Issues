@@ -78,7 +78,12 @@ function History() {
 
   return (
     <div className="history-page">
-      <h1>Run History</h1>
+      <div className="history-header">
+        <h1>Run History</h1>
+        <button type="button" className="history-refresh" onClick={retry}>
+          Refresh
+        </button>
+      </div>
       <p className="history-subtitle">
         Completed and in-progress analysis runs, with the provider/model used and resolution outcomes.
       </p>

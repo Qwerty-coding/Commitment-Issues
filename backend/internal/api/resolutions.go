@@ -20,18 +20,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	ai "CommitIssues/internal/ai"
 	"CommitIssues/internal/apply"
-	"CommitIssues/internal/fileutil"
-	git "CommitIssues/internal/git"
+	"CommitIssues/internal/engine"
+	"CommitIssues/internal/parser"
 	"CommitIssues/internal/patch"
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	"CommitIssues/internal/safeguard"
+	"CommitIssues/internal/suggestions"
 	"CommitIssues/internal/validation"
 )
 
@@ -51,25 +51,25 @@ type mutationRequest struct {
 
 // resolutionResponse wraps a single resolution for API responses.
 type resolutionResponse struct {
-	Success bool                    `json:"success"`
-	Data    resolutions.Resolution  `json:"data"`
+	Success bool                   `json:"success"`
+	Data    resolutions.Resolution `json:"data"`
 }
 
 // validationResponse wraps validation events for one resolution.
 type validationResponse struct {
-	Success bool                           `json:"success"`
-	Data    []resolutions.ResolutionEvent  `json:"data"`
+	Success bool                          `json:"success"`
+	Data    []resolutions.ResolutionEvent `json:"data"`
 }
 
 // registerResolutionHandlers registers all /api/resolutions/* routes on mux.
 // It is called from NewHandler so the routes are wired alongside the existing
 // API surface.
 func registerResolutionHandlers(mux *http.ServeMux, run *runstate.Run) {
-	// GET /api/resolutions (list all or filter by file / repository)
+	// /api/resolutions (list all, filter, or create a proposal)
 	mux.HandleFunc("/api/resolutions", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -80,7 +80,7 @@ func registerResolutionHandlers(mux *http.ServeMux, run *runstate.Run) {
 			if file != "" {
 				if repo != "" {
 					writeJSON(w, http.StatusOK, struct {
-						Success bool                    `json:"success"`
+						Success bool                     `json:"success"`
 						Data    []resolutions.Resolution `json:"data"`
 					}{Success: true, Data: run.ResolutionsFor(repo, file)})
 					return
@@ -92,18 +92,22 @@ func registerResolutionHandlers(mux *http.ServeMux, run *runstate.Run) {
 					}
 				}
 				writeJSON(w, http.StatusOK, struct {
-					Success bool                    `json:"success"`
+					Success bool                     `json:"success"`
 					Data    []resolutions.Resolution `json:"data"`
 				}{Success: true, Data: matched})
 				return
 			}
 			writeJSON(w, http.StatusOK, struct {
-				Success bool                    `json:"success"`
+				Success bool                     `json:"success"`
 				Data    []resolutions.Resolution `json:"data"`
 			}{Success: true, Data: run.AllResolutions()})
 			return
 		}
-		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET /api/resolutions")
+		if r.Method == http.MethodPost {
+			handleCreateResolution(w, r, run)
+			return
+		}
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET, POST /api/resolutions")
 	})
 
 	// /api/resolutions/{id}[/{action}]
@@ -155,6 +159,113 @@ func registerResolutionHandlers(mux *http.ServeMux, run *runstate.Run) {
 	})
 }
 
+// handleCreateResolution explicitly creates or proposes a resolution for an eligible suggestion or collision.
+func handleCreateResolution(w http.ResponseWriter, r *http.Request, run *runstate.Run) {
+	var req struct {
+		SuggestionID   string `json:"suggestionId,omitempty"`
+		RepositoryRoot string `json:"repositoryRoot"`
+		File           string `json:"file"`
+		CollisionKey   string `json:"collisionKey,omitempty"`
+		Revision       int    `json:"revision,omitempty"`
+		RegionID       string `json:"regionId,omitempty"`
+		Replacement    string `json:"replacement,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body: "+err.Error())
+		return
+	}
+	if req.RepositoryRoot == "" || req.File == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "repositoryRoot and file are required")
+		return
+	}
+
+	absRepo, err := safeguard.VerifyRepository(req.RepositoryRoot)
+	if err != nil {
+		writeResolutionError(w, err)
+		return
+	}
+	if _, err := safeguard.VerifyFilePath(absRepo, req.File); err != nil {
+		writeResolutionError(w, err)
+		return
+	}
+
+	analysis, found := run.GetAnalysis(absRepo, req.File)
+	if !found {
+		analysis, found = run.FindAnalysis(req.File)
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "ANALYSIS_NOT_FOUND", fmt.Sprintf("no analysis found for %s", req.File))
+		return
+	}
+
+	// If linked to an existing suggestion that already has a resolution, return it
+	if req.SuggestionID != "" {
+		if res, ok := run.FindResolutionBySuggestion(req.SuggestionID); ok {
+			writeJSON(w, http.StatusOK, resolutionResponse{Success: true, Data: res})
+			return
+		}
+	}
+
+	rev := req.Revision
+	if rev <= 0 {
+		rev = 1
+	}
+
+	contextHash := ""
+	if analysis.RegionContextHashes != nil && req.RegionID != "" {
+		contextHash = analysis.RegionContextHashes[req.RegionID]
+	}
+
+	initStatus := resolutions.StatusProposed
+	if !parser.IsSupportedLanguage(req.File) || req.RegionID == "" {
+		initStatus = resolutions.StatusManualReview
+	}
+
+	res := resolutions.Resolution{
+		ID:               resolutions.NewID(),
+		SuggestionID:     req.SuggestionID,
+		RunID:            run.ID,
+		Repository:       absRepo,
+		File:             req.File,
+		CollisionKey:     req.CollisionKey,
+		Revision:         rev,
+		RegionID:         req.RegionID,
+		Replacement:      req.Replacement,
+		ContentHash:      analysis.ContentHash,
+		ContextHash:      contextHash,
+		Status:           initStatus,
+		ApprovalStatus:   resolutions.ApprovalNone,
+		ValidationStatus: resolutions.ValidationNotRun,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	for _, reg := range analysis.ConflictRegions {
+		if fmt.Sprintf("%d", reg.Index) == req.RegionID {
+			res.StartLine = reg.StartLine
+			res.EndLine = reg.EndLine
+			res.Base = reg.Base
+			res.Ours = reg.Ours
+			res.Theirs = reg.Theirs
+			break
+		}
+	}
+
+	res = run.SaveResolution(res)
+
+	run.RecordResolutionEvent(resolutions.ResolutionEvent{
+		ResolutionID:   res.ID,
+		RunID:          res.RunID,
+		Repository:     res.Repository,
+		File:           res.File,
+		Actor:          resolutions.ActorUser,
+		Type:           resolutions.EventProposed,
+		PreviousStatus: "",
+		NewStatus:      res.Status,
+	})
+
+	writeJSON(w, http.StatusCreated, resolutionResponse{Success: true, Data: res})
+}
+
 // handleGetResolution returns the resolution by ID.
 func handleGetResolution(w http.ResponseWriter, r *http.Request, run *runstate.Run, resID string) {
 	res, ok := run.GetResolution(resID)
@@ -166,15 +277,30 @@ func handleGetResolution(w http.ResponseWriter, r *http.Request, run *runstate.R
 	writeJSON(w, http.StatusOK, resolutionResponse{Success: true, Data: res})
 }
 
-// handleGetValidation returns the audit events for a resolution.
+// handleGetValidation returns the audit events and validation result for a resolution.
 func handleGetValidation(w http.ResponseWriter, r *http.Request, run *runstate.Run, resID string) {
-	if _, ok := run.GetResolution(resID); !ok {
+	res, ok := run.GetResolution(resID)
+	if !ok {
 		writeError(w, http.StatusNotFound, string(resolutions.CodeResolutionNotFound),
 			fmt.Sprintf("resolution %s not found", resID))
 		return
 	}
 	events := run.ResolutionEvents(resID)
-	writeJSON(w, http.StatusOK, validationResponse{Success: true, Data: events})
+	writeJSON(w, http.StatusOK, struct {
+		Success            bool                          `json:"success"`
+		Data               []resolutions.ResolutionEvent `json:"data"`
+		ValidationStatus   string                        `json:"validationStatus,omitempty"`
+		ValidationOutput   string                        `json:"validationOutput,omitempty"`
+		ValidationExitCode int                           `json:"validationExitCode,omitempty"`
+		ValidationDuration time.Duration                 `json:"validationDuration,omitempty"`
+	}{
+		Success:            true,
+		Data:               events,
+		ValidationStatus:   res.ValidationStatus,
+		ValidationOutput:   res.ValidationOutput,
+		ValidationExitCode: res.ValidationExitCode,
+		ValidationDuration: res.ValidationDuration,
+	})
 }
 
 // handlePreview generates a read-only diff for the resolution and marks it
@@ -432,13 +558,29 @@ func handleApply(w http.ResponseWriter, r *http.Request, run *runstate.Run, resI
 		return
 	}
 
+	valCfg := run.GetValidationConfig()
+	if valCfg == nil {
+		envCfg := validation.ConfigFromEnv()
+		if len(envCfg.AllowList) > 0 {
+			valCfg = &envCfg
+		}
+	}
+	if valCfg != nil {
+		if valCfg.RepoRoot == "" {
+			valCfg.RepoRoot = absRepo
+		}
+		if valCfg.WorkDir == "" {
+			valCfg.WorkDir = absRepo
+		}
+	}
+
 	result, applyErr := apply.Apply(r.Context(), run, analysis, apply.ApplyRequest{
 		ResolutionID:        resID,
 		RepositoryRoot:      req.RepositoryRoot,
 		File:                req.File,
 		SuggestionRevision:  req.SuggestionRevision,
 		ExpectedContentHash: req.ExpectedContentHash,
-	}, nil /* no validation runner for now; can be wired from config */)
+	}, valCfg)
 
 	if applyErr != nil {
 		writeResolutionError(w, applyErr)
@@ -462,11 +604,10 @@ func handleApply(w http.ResponseWriter, r *http.Request, run *runstate.Run, resI
 func handleRevert(w http.ResponseWriter, r *http.Request, run *runstate.Run, resID string) {
 	var req struct {
 		mutationRequest
-		// PreApplyContent is the base64-encoded pre-apply file bytes captured
-		// at apply time and echoed back by the client.
-		PreApplyContent []byte `json:"preApplyContent"`
-		// PostApplyHash is the expected current-file hash after apply.
-		PostApplyHash string `json:"postApplyHash"`
+		// PreApplyContent is optional; server-side snapshot stored on resolution is used when empty.
+		PreApplyContent []byte `json:"preApplyContent,omitempty"`
+		// PostApplyHash is optional; stored hash is used when empty.
+		PostApplyHash string `json:"postApplyHash,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body: "+err.Error())
@@ -499,8 +640,7 @@ func handleRevert(w http.ResponseWriter, r *http.Request, run *runstate.Run, res
 }
 
 // handleAnalysisRefresh re-scans a repository/file pair and regenerates the
-// analysis after a stale-file failure. This is a lightweight trigger: the
-// caller is expected to re-run the full analysis pipeline separately.
+// analysis and suggestions after a stale-file failure.
 func handleAnalysisRefresh(mux *http.ServeMux, run *runstate.Run) {
 	mux.HandleFunc("/api/analysis/refresh", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -530,7 +670,7 @@ func handleAnalysisRefresh(mux *http.ServeMux, run *runstate.Run) {
 			return
 		}
 
-		// Mark all resolutions for this file as stale.
+		// Mark all resolutions for this file as stale, capturing real previous status.
 		absRepo, err := safeguard.VerifyRepository(req.RepositoryRoot)
 		if err != nil {
 			writeResolutionError(w, err)
@@ -540,6 +680,7 @@ func handleAnalysisRefresh(mux *http.ServeMux, run *runstate.Run) {
 			if res.Status == resolutions.StatusProposed ||
 				res.Status == resolutions.StatusPreviewed ||
 				res.Status == resolutions.StatusApproved {
+				prevStatus := res.Status
 				res.Status = resolutions.StatusStale
 				res.ApprovalStatus = resolutions.ApprovalExpired
 				run.SaveResolution(res)
@@ -550,32 +691,20 @@ func handleAnalysisRefresh(mux *http.ServeMux, run *runstate.Run) {
 					File:           res.File,
 					Actor:          resolutions.ActorSystem,
 					Type:           resolutions.EventStale,
-					PreviousStatus: res.Status,
+					PreviousStatus: prevStatus,
 					NewStatus:      resolutions.StatusStale,
 				})
 			}
 		}
 
-		// Re-hash the working-tree file for the refreshed analysis entry.
-		absPath := filepath.Join(absRepo, req.File)
-		ch, rh, hashErr := fileutil.RegionContextHashesForFile(absPath)
-		if hashErr != nil {
-			writeError(w, http.StatusUnprocessableEntity, "STALE_FILE",
-				fmt.Sprintf("cannot read %s for refresh: %v", req.File, hashErr))
-			return
-		}
+		// Re-run real conflict analysis on the working-tree file using the engine pipeline.
+		_ = engine.ProcessConflictFile(r.Context(), run, absRepo, req.File, engine.DefaultConfig(), false)
 
-		// Update the stored analysis if one exists.
-		if existing, found := run.GetAnalysis(absRepo, req.File); found {
-			existing.ContentHash = ch
-			existing.RegionContextHashes = rh
-			existing.AnalysisTimestamp = time.Now().UTC()
-			// Re-parse the current conflict regions from the working-tree file.
-			if data, readErr := os.ReadFile(absPath); readErr == nil {
-				existing.ConflictRegions = git.ParseConflictRegions(string(data)).Regions
-			}
-			run.RegisterAnalysis(absRepo, existing)
+		// Regenerate suggestions and fresh resolutions for the file.
+		generator := &suggestions.Generator{
+			Cfg: ai.ConfigFromEnv(),
 		}
+		_, _ = generator.GenerateForFile(r.Context(), run, absRepo, req.File)
 
 		writeJSON(w, http.StatusOK, struct {
 			Success bool   `json:"success"`

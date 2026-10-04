@@ -2,11 +2,17 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	ai "CommitIssues/internal/ai"
+	"CommitIssues/internal/cache"
+	promptcontext "CommitIssues/internal/context"
+	"CommitIssues/internal/validation"
 )
+
 
 // ErrorCode is a stable, machine-readable identifier for a pipeline error.
 type ErrorCode string
@@ -72,6 +78,14 @@ func (e *FileError) Unwrap() error { return e.Err }
 // Code implements CodedError.
 func (e *FileError) Code() ErrorCode { return e.ErrCode }
 
+// DefaultReadmeMaxBytes is the maximum byte size for a README excerpt.
+// Truncation happens at a line boundary so the excerpt is always coherent.
+const DefaultReadmeMaxBytes = 4096
+
+// EnvTargetPromptTokens overrides the soft prompt-context budget (0 disables
+// budgeting). The collision payload is never trimmed.
+const EnvTargetPromptTokens = "AI_TARGET_PROMPT_TOKENS"
+
 // Config holds the runtime options supplied by the user/CLI. AI provider
 // settings live in the single shared ai.Config (flags > env > provider
 // defaults); the pipeline-level fields below govern analysis only.
@@ -83,18 +97,85 @@ type Config struct {
 	// AI is the shared provider-configuration used only when runAI is true
 	// (`resolve` and the Suggestions API). `analyze` and `serve` stay AI-free.
 	AI ai.Config
+
+	// Validation holds user-configured post-apply validation settings.
+	Validation validation.Config
+
+	// ASTCache holds the optional incremental AST cache. If nil, engine uses a default in-memory cache.
+	ASTCache cache.Cache
+
+	// ReadmeContext enables including an excerpt of the repo-root README in the
+	// prompt context. Enabled by default; disable via AI_README_CONTEXT=false
+	// or --readme-context=false.
+	ReadmeContext bool
+
+	// ReadmeMaxBytes caps the README excerpt at this many bytes, truncated at a
+	// line boundary. Governed by AI_README_MAX_BYTES / --readme-max-bytes.
+	// The excerpt counts toward the AI_MAX_PROMPT_BYTES budget.
+	ReadmeMaxBytes int
+
+	// AITargetPromptTokens is the soft budget for the assembled prompt context
+	// (README → functions → variables trim order). 0 disables budgeting. It
+	// never trims the collision payload. Governed by AI_TARGET_PROMPT_TOKENS.
+	AITargetPromptTokens int
 }
+
 
 // DefaultConfig returns a valid baseline configuration. Callers override the
 // fields they care about and call Validate before scanning.
 func DefaultConfig() Config {
-	return Config{
+	cfg := Config{
 		MaxConcurrency:      4,
 		ConfidenceThreshold: 70,
 		Timeout:             5 * time.Minute,
 		AI:                  ai.Default(""),
+		Validation:          validation.Config{},
+		ASTCache:             DefaultASTCache(),
+		ReadmeContext:        true,
+		ReadmeMaxBytes:       DefaultReadmeMaxBytes,
+		AITargetPromptTokens: promptcontext.DefaultTargetPromptTokens,
 	}
+	// Apply environment overrides for the README feature.
+	if v := os.Getenv(ai.EnvReadmeContext); v != "" {
+		cfg.ReadmeContext = !equalsIgnoreCase(v, "false", "0", "no", "off")
+	}
+	if v := os.Getenv(ai.EnvReadmeMaxBytes); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ReadmeMaxBytes = n
+		}
+	}
+	if v := os.Getenv(EnvTargetPromptTokens); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.AITargetPromptTokens = n
+		}
+	}
+	return cfg
 }
+
+// DefaultASTCache builds the AST cache honouring the CACHE_* environment
+// variables (CACHE_DISK_ENABLED, CACHE_DIR, CACHE_MAX_DISK_BYTES,
+// CACHE_MAX_ENTRIES, CACHE_MAX_MEMORY_BYTES). If the environment specifies an
+// unusable disk directory it falls back to a safe in-memory cache rather than
+// failing the whole run.
+func DefaultASTCache() cache.Cache {
+	c, err := cache.NewFromEnv()
+	if err != nil {
+		return cache.NewDefault()
+	}
+	return c
+}
+
+// equalsIgnoreCase reports whether s equals any of the given targets
+// (case-insensitive). Used for boolean-like env vars.
+func equalsIgnoreCase(s string, targets ...string) bool {
+	for _, t := range targets {
+		if strings.EqualFold(s, t) {
+			return true
+		}
+	}
+	return false
+}
+
 
 // Validate checks every configuration invariant in a fixed order. It must be
 // called before repository scanning begins so that invalid settings never
@@ -114,6 +195,14 @@ func (c Config) Validate() error {
 			Value:   c.Timeout.String(),
 			Rule:    "Timeout > 0",
 			Message: "timeout must be greater than zero",
+		}
+	}
+	if c.AITargetPromptTokens < 0 {
+		return &ConfigError{
+			Field:   "AITargetPromptTokens",
+			Value:   strconv.Itoa(c.AITargetPromptTokens),
+			Rule:    "AITargetPromptTokens >= 0",
+			Message: "target prompt tokens must be zero (disabled) or greater",
 		}
 	}
 	if c.ConfidenceThreshold < 0 || c.ConfidenceThreshold > 100 {

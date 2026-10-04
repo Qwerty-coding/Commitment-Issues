@@ -1,0 +1,160 @@
+[
+  {
+    "language": "csharp",
+    "file": "Conflict.cs",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Method",
+        "name": "Calculate"
+      },
+      {
+        "type": "COLLISION",
+        "kind": "Class",
+        "name": "Calculator"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "java",
+    "file": "Conflict.java",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Method",
+        "name": "calculate"
+      },
+      {
+        "type": "COLLISION",
+        "kind": "Class",
+        "name": "Calculator"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "c",
+    "file": "conflict.c",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "cpp",
+    "file": "conflict.cpp",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "go",
+    "file": "conflict.go",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "Calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "javascript",
+    "file": "conflict.js",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "php",
+    "file": "conflict.php",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "python",
+    "file": "conflict.py",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "ruby",
+    "file": "conflict.rb",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Method",
+        "name": "calculate"
+      },
+      {
+        "type": "COLLISION",
+        "kind": "Class",
+        "name": "Calculator"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "rust",
+    "file": "conflict.rs",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  },
+  {
+    "language": "typescript",
+    "file": "conflict.ts",
+    "collisions": [
+      {
+        "type": "COLLISION",
+        "kind": "Function",
+        "name": "calculate"
+      }
+    ],
+    "our_changes": [],
+    "their_changes": []
+  }
+]

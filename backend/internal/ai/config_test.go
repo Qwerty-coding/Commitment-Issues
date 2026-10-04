@@ -129,6 +129,131 @@ func TestConfigFromEnv_InvalidValuesIgnored(t *testing.T) {
 	}
 }
 
+func TestApplyProviderDefaults_FlagSelectedProvider(t *testing.T) {
+	// Simulate the CLI scenario: no AI_* variables set, so
+	// ConfigFromEnv bakes in the Ollama fallback defaults, then
+	// a flag selects a different provider.
+	for _, k := range []string{"AI_PROVIDER", "AI_MODEL", "AI_BASE_URL", "OLLAMA_BASE_URL"} {
+		t.Setenv(k, "")
+	}
+
+	cfg := ConfigFromEnv()
+	cfg.Provider = "gemini"
+	if cfg.Model != DefaultOllamaModel {
+		t.Fatalf("precondition failed: model is %q, want the Ollama fallback default", cfg.Model)
+	}
+
+	fixed := cfg.ApplyProviderDefaults(cfg.Provider)
+	if fixed.Model != DefaultGeminiModel {
+		t.Errorf("ApplyProviderDefaults(gemini).Model = %q, want %q", fixed.Model, DefaultGeminiModel)
+	}
+	// Gemini's documented default endpoint is applied by the
+	// resolver, so the default base URL is empty.
+	if fixed.BaseURL != "" {
+		t.Errorf("ApplyProviderDefaults(gemini).BaseURL = %q, want empty (resolver default)", fixed.BaseURL)
+	}
+	if err := fixed.Validate(); err != nil {
+		t.Errorf("fixed config must validate: %v", err)
+	}
+}
+
+func TestApplyProviderDefaults_EveryProviderWorksAlone(t *testing.T) {
+	for _, k := range []string{"AI_PROVIDER", "AI_MODEL", "AI_BASE_URL", "OLLAMA_BASE_URL"} {
+		t.Setenv(k, "")
+	}
+	cases := []struct {
+		provider string
+		model    string
+		baseURL  string
+	}{
+		{"gemini", DefaultGeminiModel, ""},
+		{"groq", DefaultGroqModel, DefaultGroqBaseURL},
+		{"ollama", DefaultOllamaModel, DefaultOllamaBaseURL},
+		{"GEMINI", DefaultGeminiModel, ""}, // case-insensitive
+	}
+	for _, tc := range cases {
+		cfg := ConfigFromEnv()
+		cfg.Provider = tc.provider
+		fixed := cfg.ApplyProviderDefaults(tc.provider)
+		if fixed.Model != tc.model {
+			t.Errorf("ApplyProviderDefaults(%q).Model = %q, want %q", tc.provider, fixed.Model, tc.model)
+		}
+		if fixed.BaseURL != tc.baseURL {
+			t.Errorf("ApplyProviderDefaults(%q).BaseURL = %q, want %q", tc.provider, fixed.BaseURL, tc.baseURL)
+		}
+	}
+}
+
+func TestApplyProviderDefaults_PreservesEnvModel(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "")
+	t.Setenv("AI_MODEL", "env-model")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	cfg := ConfigFromEnv()
+	cfg.Provider = "groq"
+	fixed := cfg.ApplyProviderDefaults(cfg.Provider)
+	if fixed.Model != "env-model" {
+		t.Errorf("env model must win over provider defaults, got %q", fixed.Model)
+	}
+	if fixed.BaseURL != DefaultGroqBaseURL {
+		t.Errorf("groq base URL default = %q, want %q", fixed.BaseURL, DefaultGroqBaseURL)
+	}
+}
+
+func TestApplyProviderDefaults_PreservesEnvBaseURL(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "")
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("AI_BASE_URL", "http://relay.example/v1")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	cfg := ConfigFromEnv()
+	cfg.Provider = "gemini"
+	fixed := cfg.ApplyProviderDefaults(cfg.Provider)
+	if fixed.BaseURL != "http://relay.example/v1" {
+		t.Errorf("env base URL must win over provider defaults, got %q", fixed.BaseURL)
+	}
+	if fixed.Model != DefaultGeminiModel {
+		t.Errorf("model default = %q, want %q", fixed.Model, DefaultGeminiModel)
+	}
+}
+
+func TestApplyProviderDefaults_LegacyOllamaBaseURLKept(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "")
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("OLLAMA_BASE_URL", "http://legacy.test:11434/v1")
+
+	cfg := ConfigFromEnv()
+	cfg.Provider = "ollama"
+	fixed := cfg.ApplyProviderDefaults(cfg.Provider)
+	if fixed.BaseURL != "http://legacy.test:11434/v1" {
+		t.Errorf("legacy OLLAMA_BASE_URL must be preserved, got %q", fixed.BaseURL)
+	}
+	if fixed.Model != DefaultOllamaModel {
+		t.Errorf("model default = %q, want %q", fixed.Model, DefaultOllamaModel)
+	}
+}
+
+func TestApplyProviderDefaults_StaleFallbackURLReplaced(t *testing.T) {
+	// A legacy Ollama URL must not leak into a provider selected
+	// via a flag.
+	t.Setenv("AI_PROVIDER", "")
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("OLLAMA_BASE_URL", "http://legacy.test:11434/v1")
+
+	cfg := ConfigFromEnv()
+	if cfg.BaseURL != "http://legacy.test:11434/v1" {
+		t.Fatalf("precondition failed: legacy URL not applied, got %q", cfg.BaseURL)
+	}
+	cfg.Provider = "gemini"
+	fixed := cfg.ApplyProviderDefaults(cfg.Provider)
+	if fixed.BaseURL != "" {
+		t.Errorf("stale Ollama URL leaked into gemini config: %q", fixed.BaseURL)
+	}
+}
+
 func TestValidate_DeterministicOrder(t *testing.T) {
 	base := Default("")
 

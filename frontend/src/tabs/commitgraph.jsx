@@ -9,7 +9,9 @@ function Commitgraph() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/graph`)
+    const controller = new AbortController()
+
+    fetch(`${API_BASE}/api/graph`, { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         if (!payload?.success) {
@@ -18,10 +20,15 @@ function Commitgraph() {
         setGraph(payload.data)
       })
       .catch((err) => {
+        if (err.name === 'AbortError') return
         console.error('Error loading graph:', err)
         setError(err.message)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
   }, [])
 
   if (loading) {
@@ -60,10 +67,14 @@ function Commitgraph() {
     }
 
     const rootNodes = graph.nodes.filter((node) => node.data.status === 'file')
+    // Deduplicate targets per source so repeated CALLS edges cannot fan out.
     const childMap = graph.edges.reduce((acc, edge) => {
       const source = edge.data.source
+      const target = edge.data.target
       acc[source] = acc[source] || []
-      acc[source].push(edge.data.target)
+      if (!acc[source].includes(target)) {
+        acc[source].push(target)
+      }
       return acc
     }, {})
 
@@ -72,7 +83,25 @@ function Commitgraph() {
       return acc
     }, {})
 
+    // Semantic CALLS graphs can contain cycles (mutual recursion). Every node
+    // is rendered once; repeats degrade to a cycle marker instead of recursing
+    // forever ("Maximum call stack size exceeded").
+    const rendered = new Set()
+
     const renderNode = (nodeId) => {
+      if (rendered.has(nodeId)) {
+        const seen = nodeById[nodeId]
+        return (
+          <li className="tree-node tree-node-cycle" key={`${nodeId}-cycle`}>
+            <div className="tree-label">
+              <div className="node-title">↻ {seen?.data.label || nodeId}</div>
+              <div className="node-meta">cycle — already shown above</div>
+            </div>
+          </li>
+        )
+      }
+      rendered.add(nodeId)
+
       const node = nodeById[nodeId]
       if (!node) return null
 

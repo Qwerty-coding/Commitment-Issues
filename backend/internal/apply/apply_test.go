@@ -16,6 +16,7 @@ import (
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	"CommitIssues/internal/safeguard"
+	"CommitIssues/internal/validation"
 )
 
 func createTestRepoWithConflict(t *testing.T, filename, content string) (string, promptcontext.FileAnalysis) {
@@ -514,3 +515,491 @@ func TestRollback_RejectedAfterUnrelatedEdit(t *testing.T) {
 		t.Errorf("expected ROLLBACK_FAILURE, got %v", err)
 	}
 }
+
+func TestRollback_UsesStoredServerSideSnapshot(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n// bottom\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	// Apply
+	applyRes, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	// Verify server stored snapshot and separate hashes
+	if applyRes.Resolution.PreApplyContent != content {
+		t.Errorf("expected stored PreApplyContent to match original, got %s", applyRes.Resolution.PreApplyContent)
+	}
+	if applyRes.Resolution.OriginalContentHash == "" {
+		t.Error("expected OriginalContentHash to be populated")
+	}
+	if applyRes.Resolution.PostApplyContentHash == "" {
+		t.Error("expected PostApplyContentHash to be populated")
+	}
+
+	// Rollback without supplying PreApplyContent or PostApplyHash in request!
+	rollbackReq := RollbackRequest{
+		ResolutionID:   res.ID,
+		RepositoryRoot: repo,
+		File:           "file.js",
+	}
+	rolledBackRes, err := Rollback(context.Background(), run, rollbackReq)
+	if err != nil {
+		t.Fatalf("rollback with stored snapshot failed: %v", err)
+	}
+	if rolledBackRes.Status != resolutions.StatusReverted {
+		t.Errorf("expected StatusReverted, got %s", rolledBackRes.Status)
+	}
+
+	diskBytes, _ := os.ReadFile(filepath.Join(repo, "file.js"))
+	if string(diskBytes) != content {
+		t.Errorf("restored file mismatch: got %s, want %s", string(diskBytes), content)
+	}
+}
+
+func TestRollback_SequentialChanges(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn0_ours();\n=======\nfn0_theirs();\n>>>>>>> theirs\n// middle\n<<<<<<< ours\nfn1_ours();\n=======\nfn1_theirs();\n>>>>>>> theirs\n// bottom\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res0 := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-0",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn0_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	res1 := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "1",
+		Replacement:    "fn1_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res0)
+	run.SaveResolution(res1)
+
+	// Apply res0
+	_, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res0.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("apply res0 failed: %v", err)
+	}
+
+	// Update analysis and res1 for sequential application
+	currentData, _ := os.ReadFile(filepath.Join(repo, "file.js"))
+	parsed := git.ParseConflictRegions(string(currentData))
+	analysis1 := promptcontext.FileAnalysis{
+		Repository:          repo,
+		File:                "file.js",
+		ContentHash:         fileutil.HashContent(currentData),
+		ConflictRegions:     parsed.Regions,
+		RegionContextHashes: make(map[string]string),
+	}
+	res1.RegionID = "0"
+	res1.ContentHash = analysis1.ContentHash
+	run.SaveResolution(res1)
+	// Apply res1
+	_, err = Apply(context.Background(), run, analysis1, ApplyRequest{
+		ResolutionID:       res1.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("apply res1 failed: %v", err)
+	}
+
+	// Now attempting to rollback res0 must be REFUSED because file has sequential edits (res1 applied)
+	_, err = Rollback(context.Background(), run, RollbackRequest{
+		ResolutionID:   res0.ID,
+		RepositoryRoot: repo,
+		File:           "file.js",
+	})
+	if err == nil {
+		t.Fatal("expected rollback of res0 to fail due to sequential change res1")
+	}
+	se, ok := err.(*safeguard.SafeError)
+	if !ok || se.Code != resolutions.CodeRollbackFailure {
+		t.Errorf("expected ROLLBACK_FAILURE, got %v", err)
+	}
+
+	// Rollback res1 first (in reverse sequential order) -> succeeds
+	_, err = Rollback(context.Background(), run, RollbackRequest{
+		ResolutionID:   res1.ID,
+		RepositoryRoot: repo,
+		File:           "file.js",
+	})
+	if err != nil {
+		t.Fatalf("rollback of res1 failed: %v", err)
+	}
+
+	// Now rollback res0 succeeds!
+	_, err = Rollback(context.Background(), run, RollbackRequest{
+		ResolutionID:   res0.ID,
+		RepositoryRoot: repo,
+		File:           "file.js",
+	})
+	if err != nil {
+		t.Fatalf("rollback of res0 failed: %v", err)
+	}
+
+	diskBytes, _ := os.ReadFile(filepath.Join(repo, "file.js"))
+	if string(diskBytes) != content {
+		t.Errorf("final disk content mismatch:\ngot: %s\nwant: %s", string(diskBytes), content)
+	}
+}
+
+func TestApply_ValidationPassed(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{"go"},
+		Command:   []string{"go", "version"},
+		RepoRoot:  repo,
+	}
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if result.Resolution.Status != resolutions.StatusApplied {
+		t.Errorf("status = %s, want StatusApplied", result.Resolution.Status)
+	}
+	if result.Resolution.ValidationStatus != resolutions.ValidationPassed {
+		t.Errorf("validationStatus = %s, want ValidationPassed", result.Resolution.ValidationStatus)
+	}
+	if !strings.Contains(result.Resolution.ValidationOutput, "go version") {
+		t.Errorf("validationOutput missing expected text: %s", result.Resolution.ValidationOutput)
+	}
+	if result.Resolution.ValidationExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", result.Resolution.ValidationExitCode)
+	}
+}
+
+func TestApply_ValidationFailed(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{"go"},
+		Command:   []string{"go", "nonexistentcommandfails"},
+		RepoRoot:  repo,
+	}
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply should not return Go error when validation command fails: %v", err)
+	}
+
+	if result.Resolution.Status != resolutions.StatusValidationFailed {
+		t.Errorf("status = %s, want StatusValidationFailed", result.Resolution.Status)
+	}
+	if result.Resolution.ValidationStatus != resolutions.ValidationFailed {
+		t.Errorf("validationStatus = %s, want ValidationFailed", result.Resolution.ValidationStatus)
+	}
+	if result.Resolution.ValidationExitCode == 0 {
+		t.Errorf("exit code should be non-zero, got %d", result.Resolution.ValidationExitCode)
+	}
+
+	// Applied patch is preserved on disk
+	diskBytes, _ := os.ReadFile(filepath.Join(repo, "file.js"))
+	if !strings.Contains(string(diskBytes), "fn_resolved();") {
+		t.Errorf("file should retain applied patch: %s", string(diskBytes))
+	}
+}
+
+func TestApply_ValidationTimeout(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{"go"},
+		Command:   []string{"go", "version"},
+		RepoRoot:  repo,
+		Timeout:   1 * time.Nanosecond,
+	}
+	time.Sleep(1 * time.Millisecond)
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if result.Resolution.ValidationStatus != resolutions.ValidationTimedOut &&
+		result.Resolution.ValidationStatus != resolutions.ValidationCancelled {
+		t.Errorf("expected timed_out or cancelled, got %s", result.Resolution.ValidationStatus)
+	}
+	if result.Resolution.Status != resolutions.StatusValidationFailed {
+		t.Errorf("expected StatusValidationFailed, got %s", result.Resolution.Status)
+	}
+}
+
+func TestApply_ValidationCancelled(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{"go"},
+		Command:   []string{"go", "version"},
+		RepoRoot:  repo,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled
+
+	result, _ := Apply(ctx, run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+
+	if result.Resolution.ValidationStatus != resolutions.ValidationCancelled {
+		t.Errorf("expected ValidationCancelled, got %s", result.Resolution.ValidationStatus)
+	}
+}
+
+func TestApply_ValidationDisallowed(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{"go"},
+		Command:   []string{"rm", "-rf", "/"},
+		RepoRoot:  repo,
+	}
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if result.Resolution.ValidationStatus != resolutions.ValidationFailed {
+		t.Errorf("expected ValidationFailed, got %s", result.Resolution.ValidationStatus)
+	}
+}
+
+func TestApply_ValidationOversizedOutput(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList:   []string{"go"},
+		Command:     []string{"go", "version"},
+		RepoRoot:    repo,
+		OutputLimit: 15,
+	}
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !strings.Contains(result.Resolution.ValidationOutput, "truncated") {
+		t.Errorf("output should be truncated, got %s", result.Resolution.ValidationOutput)
+	}
+}
+
+func TestApply_ValidationZeroCommandsNotRun(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nfn_ours();\n=======\nfn_theirs();\n>>>>>>> theirs\n"
+	repo, analysis := createTestRepoWithConflict(t, "file.js", content)
+
+	run := runstate.NewRun()
+	res := resolutions.Resolution{
+		ID:             resolutions.NewID(),
+		SuggestionID:   "sug-1",
+		RunID:          run.ID,
+		Repository:     repo,
+		File:           "file.js",
+		Revision:       1,
+		RegionID:       "0",
+		Replacement:    "fn_resolved();",
+		Status:         resolutions.StatusApproved,
+		ApprovalStatus: resolutions.ApprovalApproved,
+		CreatedAt:      time.Now().UTC(),
+	}
+	run.SaveResolution(res)
+
+	valCfg := &validation.Config{
+		AllowList: []string{}, // Zero configured commands!
+		RepoRoot:  repo,
+	}
+
+	result, err := Apply(context.Background(), run, analysis, ApplyRequest{
+		ResolutionID:       res.ID,
+		RepositoryRoot:     repo,
+		File:               "file.js",
+		SuggestionRevision: 1,
+	}, valCfg)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if result.Resolution.ValidationStatus != resolutions.ValidationNotRun {
+		t.Errorf("expected ValidationNotRun, got %s", result.Resolution.ValidationStatus)
+	}
+	if result.Resolution.Status != resolutions.StatusApplied {
+		t.Errorf("expected StatusApplied, got %s", result.Resolution.Status)
+	}
+}
+

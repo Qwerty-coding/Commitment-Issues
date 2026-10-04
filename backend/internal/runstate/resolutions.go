@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"CommitIssues/internal/resolutions"
+	"CommitIssues/internal/validation"
 )
 
 // Resolution storage on the Run. Resolutions are keyed by their
@@ -176,4 +177,33 @@ func (r *Run) EndResolutionApply(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.resolutionInFlight, id)
+}
+
+// TryBeginResolutionRevert registers an in-flight revert for the resolution ID,
+// reusing the per-resolution in-flight tracker.
+func (r *Run) TryBeginResolutionRevert(id string) bool {
+	return r.TryBeginResolutionApply(id)
+}
+
+// EndResolutionRevert releases the in-flight revert registration.
+func (r *Run) EndResolutionRevert(id string) {
+	r.EndResolutionApply(id)
+}
+
+// SetValidationConfig stores the validation configuration for this run.
+func (r *Run) SetValidationConfig(cfg validation.Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.validationCfg = &cfg
+}
+
+// GetValidationConfig returns the stored validation configuration, if any.
+func (r *Run) GetValidationConfig() *validation.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.validationCfg == nil {
+		return nil
+	}
+	cp := *r.validationCfg
+	return &cp
 }

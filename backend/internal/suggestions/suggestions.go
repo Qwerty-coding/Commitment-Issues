@@ -28,6 +28,7 @@ import (
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
 	git "CommitIssues/internal/git"
+	parser "CommitIssues/internal/parser"
 	resolutions "CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
@@ -302,6 +303,7 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 			// When regenerated: invalidate previous approvals, mark existing previews stale
 			if priorRes, found := run.FindResolutionBySuggestion(prior.ID); found {
 				if priorRes.Status != resolutions.StatusApplied && priorRes.Status != resolutions.StatusReverted {
+					prevStatus := priorRes.Status
 					priorRes.Status = resolutions.StatusStale
 					priorRes.ApprovalStatus = resolutions.ApprovalExpired
 					run.SaveResolution(priorRes)
@@ -312,7 +314,7 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 						File:           priorRes.File,
 						Actor:          resolutions.ActorSystem,
 						Type:           resolutions.EventStale,
-						PreviousStatus: priorRes.Status,
+						PreviousStatus: prevStatus,
 						NewStatus:      resolutions.StatusStale,
 					})
 				}
@@ -362,8 +364,12 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 
 	if run != nil && (item.Status == runstate.StatusComplete || item.Status == runstate.StatusBelowThreshold) {
 		contextHash := ""
-		if analysis.RegionContextHashes != nil {
+		if analysis.RegionContextHashes != nil && regionID != "" {
 			contextHash = analysis.RegionContextHashes[regionID]
+		}
+		initStatus := resolutions.StatusProposed
+		if !parser.IsSupportedLanguage(analysis.File) || !hasRegion || regionID == "" {
+			initStatus = resolutions.StatusManualReview
 		}
 		resolutionRecord := resolutions.Resolution{
 			ID:               resolutions.NewID(),
@@ -382,7 +388,7 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 			Ours:             region.Ours,
 			Theirs:           region.Theirs,
 			Replacement:      item.Resolution.SuggestedCode,
-			Status:           resolutions.StatusProposed,
+			Status:           initStatus,
 			ApprovalStatus:   resolutions.ApprovalNone,
 			ValidationStatus: resolutions.ValidationNotRun,
 			CreatedAt:        time.Now().UTC(),

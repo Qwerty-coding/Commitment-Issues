@@ -20,6 +20,8 @@ type GroqResolver struct {
 	Client  *http.Client
 	// MaxResponseSize bounds the accepted HTTP response body.
 	MaxResponseSize int
+	// PayloadFormat selects TOON (default) or JSON for the user payload.
+	PayloadFormat string
 }
 
 func newGroqResolver(cfg Config, client *http.Client) (Resolver, error) {
@@ -39,10 +41,11 @@ func newGroqResolver(cfg Config, client *http.Client) (Resolver, error) {
 		APIKey:          cfg.APIKey,
 		Client:          client,
 		MaxResponseSize: cfg.MaxResponseSize,
+		PayloadFormat:   cfg.EffectivePayloadFormat(),
 	}, nil
 }
 
 func (g *GroqResolver) ResolveCollision(ctx context.Context, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR) (*AIResolutionResponse, error) {
 	// Groq uses the exact same payload schema as OpenAI.
-	return resolveOpenAICompatible(ctx, g.Client, g.BaseURL, g.Model, g.APIKey, g.APIKey, collision, promptCtx, "groq", g.MaxResponseSize)
+	return resolveOpenAICompatible(ctx, g.Client, g.BaseURL, g.Model, g.APIKey, g.APIKey, collision, promptCtx, "groq", g.MaxResponseSize, g.PayloadFormat)
 }

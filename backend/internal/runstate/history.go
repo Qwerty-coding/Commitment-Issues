@@ -1,7 +1,11 @@
 package runstate
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,10 +46,18 @@ type History struct {
 	mu      sync.Mutex
 	entries map[string]RunHistory
 	max     int
+	// persistPath, when non-empty, is the opt-in JSON file the history is
+	// loaded from and written to. Empty means purely in-memory.
+	persistPath string
 }
 
 // DefaultHistoryLimit bounds the in-memory history.
 const DefaultHistoryLimit = 100
+
+// EnvHistoryPersistPath opts into durable history. When set to a file path,
+// history is loaded on startup and persisted on every mutation. Unset means
+// history stays in-memory only.
+const EnvHistoryPersistPath = "HISTORY_PERSIST_PATH"
 
 // NewHistory creates a bounded history store. A non-positive limit falls
 // back to DefaultHistoryLimit.
@@ -56,18 +68,72 @@ func NewHistory(max int) *History {
 	return &History{entries: make(map[string]RunHistory), max: max}
 }
 
-// Record upserts a history entry. When the store is full, the entry with the
-// oldest completion (falling back to start) time is evicted; the entry being
-// upserted always survives its own eviction window.
-func (h *History) Record(entry RunHistory) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.entries[entry.Key()] = entry
+// NewHistoryFromEnv creates a history store, enabling durable history only when
+// HISTORY_PERSIST_PATH is set (explicit opt-in). Existing entries are loaded
+// from that file; a missing or corrupt file degrades gracefully to empty.
+func NewHistoryFromEnv(max int) *History {
+	return newPersistentHistory(max, strings.TrimSpace(os.Getenv(EnvHistoryPersistPath)))
+}
 
+// newPersistentHistory builds a bounded history that persists to path. An empty
+// path yields an in-memory-only store.
+func newPersistentHistory(max int, path string) *History {
+	h := NewHistory(max)
+	if path == "" {
+		return h
+	}
+	h.persistPath = path
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return h
+	}
+	var entries []RunHistory
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return h
+	}
+	for _, e := range entries {
+		if e.RunID == "" && e.Repository == "" {
+			continue
+		}
+		h.entries[e.Key()] = e
+	}
+	h.evictLocked()
+	return h
+}
+
+// persistLocked writes the current history to disk atomically. It must be
+// called with h.mu held. Errors are intentionally swallowed: durable history is
+// a best-effort convenience and must never fail a live run.
+func (h *History) persistLocked() {
+	if h.persistPath == "" {
+		return
+	}
+	entries := make([]RunHistory, 0, len(h.entries))
+	for _, e := range h.entries {
+		entries = append(entries, e)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Key() < entries[j].Key() })
+
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return
+	}
+	if dir := filepath.Dir(h.persistPath); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	tmp := h.persistPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, h.persistPath)
+}
+
+// evictLocked trims the store down to its bound. Must be called with h.mu held.
+func (h *History) evictLocked() {
 	if len(h.entries) <= h.max {
 		return
 	}
-	// Evict the oldest entry (deterministic tie-break by key).
 	victims := make([]RunHistory, 0, len(h.entries))
 	for _, e := range h.entries {
 		victims = append(victims, e)
@@ -82,6 +148,17 @@ func (h *History) Record(entry RunHistory) {
 	for i := 0; i < len(h.entries)-h.max; i++ {
 		delete(h.entries, victims[i].Key())
 	}
+}
+
+// Record upserts a history entry. When the store is full, the entry with the
+// oldest completion (falling back to start) time is evicted; the entry being
+// upserted always survives its own eviction window.
+func (h *History) Record(entry RunHistory) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.entries[entry.Key()] = entry
+	h.evictLocked()
+	h.persistLocked()
 }
 
 func evictTime(e RunHistory) time.Time {
@@ -105,6 +182,7 @@ func (h *History) UpdateSuggestions(runID, repository string, succeeded, failed,
 	entry.Failed = failed
 	entry.BelowThreshold = belowThreshold
 	h.entries[FileKey(runID, repository)] = entry
+	h.persistLocked()
 }
 
 // Merge applies fn to the entry for runID+repository under the history lock
@@ -120,6 +198,7 @@ func (h *History) Merge(runID, repository string, fn func(*RunHistory)) bool {
 	}
 	fn(&entry)
 	h.entries[key] = entry
+	h.persistLocked()
 	return true
 }
 

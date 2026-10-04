@@ -3,6 +3,7 @@
 package fileutil
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,6 +18,19 @@ import (
 // the FileAnalysis shape or the conflict parser output changes in a way that
 // makes old snapshots incompatible.
 const ParserVersion = "1"
+
+// MaxFileSize is the maximum accepted file size for source code AST parsing (10 MB).
+const MaxFileSize = 10 * 1024 * 1024
+
+// IsBinaryContent reports whether data appears to be binary by scanning the
+// first 8000 bytes for null bytes (standard Git heuristic).
+func IsBinaryContent(data []byte) bool {
+	limit := len(data)
+	if limit > 8000 {
+		limit = 8000
+	}
+	return bytes.ContainsRune(data[:limit], 0)
+}
 
 // HashContent returns the hex-encoded SHA-256 hash of data.
 func HashContent(data []byte) string {

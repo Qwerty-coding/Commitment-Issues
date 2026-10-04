@@ -1,8 +1,8 @@
 .commitgraph-page {
   width: 100%;
-  min-height: calc(100vh - 60px);
-  padding: 45px;
-  background-color: #f8f9fb;
+  min-height: calc(100vh - var(--navbar-height, 56px));
+  padding: 28px;
+  background-color: var(--bg, #f8f9fb);
 }
 
 .commitgraph-page h1 {
@@ -71,6 +71,17 @@
   bottom: 0;
   width: 2px;
   background: #e2e8f0;
+}
+
+.tree-node-cycle .tree-label {
+  background: #f8fafc;
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.tree-node-cycle .node-title {
+  font-weight: 600;
+  color: #64748b;
 }
 
 .tree-label {
@@ -189,7 +200,7 @@
 }
 
 .no-graph {
-  padding: 40px;
+  padding: 24px;
   background: white;
   border: 1px solid #dde2ea;
   border-radius: 18px;

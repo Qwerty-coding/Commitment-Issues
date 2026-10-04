@@ -8,6 +8,7 @@ import (
 
 	promptcontext "CommitIssues/internal/context"
 	semantic "CommitIssues/internal/semantic"
+	"CommitIssues/internal/toon"
 )
 
 func init() {
@@ -25,6 +26,8 @@ type OllamaResolver struct {
 	APIKey string
 	// MaxResponseSize bounds the accepted HTTP response body.
 	MaxResponseSize int
+	// PayloadFormat selects TOON (default) or JSON for the user payload.
+	PayloadFormat string
 }
 
 func newOllamaResolver(cfg Config, client *http.Client) (Resolver, error) {
@@ -43,21 +46,39 @@ func newOllamaResolver(cfg Config, client *http.Client) (Resolver, error) {
 		Client:          client,
 		APIKey:          cfg.APIKey,
 		MaxResponseSize: cfg.MaxResponseSize,
+		PayloadFormat:   cfg.EffectivePayloadFormat(),
 	}, nil
 }
 
 func (o *OllamaResolver) ResolveCollision(ctx context.Context, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR) (*AIResolutionResponse, error) {
-	return resolveOpenAICompatible(ctx, o.Client, o.BaseURL, o.Model, "", o.APIKey, collision, promptCtx, "ollama", o.MaxResponseSize)
+	return resolveOpenAICompatible(ctx, o.Client, o.BaseURL, o.Model, "", o.APIKey, collision, promptCtx, "ollama", o.MaxResponseSize, o.PayloadFormat)
 }
 
 // resolveOpenAICompatible is the shared OpenAI-compatible chat completion
 // flow used by Ollama and Groq: identical payload schema, different
 // endpoints and auth.
-func resolveOpenAICompatible(ctx context.Context, client *http.Client, baseURL, model, authKey, secretKey string, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR, provider string, maxResponseSize int) (*AIResolutionResponse, error) {
+// encodeCollisionPayload serializes the collision for the provider in the
+// configured format. TOON is the default (token-efficient for the uniform
+// arrays that dominate payloads); JSON remains the per-run fallback.
+func encodeCollisionPayload(collision semantic.DiffItem, format string) (string, error) {
+	if format == "json" {
+		data, err := json.Marshal(collision)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	return toon.Marshal(collision)
+}
+
+func resolveOpenAICompatible(ctx context.Context, client *http.Client, baseURL, model, authKey, secretKey string, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR, provider string, maxResponseSize int, payloadFormat string) (*AIResolutionResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, AsError(err)
 	}
-	userPayload, err := json.Marshal(collision)
+	if payloadFormat == "" {
+		payloadFormat = DefaultPayloadFormat
+	}
+	userPayload, err := encodeCollisionPayload(collision, payloadFormat)
 	if err != nil {
 		return nil, NewError(CodeConfigInvalid, false, "failed to marshal collision payload: %v", err)
 	}
@@ -66,8 +87,8 @@ func resolveOpenAICompatible(ctx context.Context, client *http.Client, baseURL, 
 		"model":       model,
 		"temperature": 0.0,
 		"messages": []map[string]string{
-			{"role": "system", "content": defaultSystemPrompt},
-			{"role": "user", "content": promptCtx.Context + "\n\n" + string(userPayload)},
+			{"role": "system", "content": systemPromptFor(payloadFormat)},
+			{"role": "user", "content": promptCtx.Context + "\n\n" + userPayload},
 		},
 		"response_format": map[string]string{"type": "json_object"},
 	}

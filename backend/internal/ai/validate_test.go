@@ -218,9 +218,9 @@ func TestResolveCollisionWithRetry_CancelNotRetried(t *testing.T) {
 
 func TestResolveCollisionWithRetry_DeadlineNotRetried(t *testing.T) {
 	resolver := &fakeResolver{responses: []error{NewError(CodeHTTPError, true, "503")}}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
-	time.Sleep(time.Millisecond)
+	<-ctx.Done()
 	_, err := ResolveCollisionWithRetry(ctx, retryConfig(), resolver, diffItem(), promptCtx())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)

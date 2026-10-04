@@ -12,7 +12,9 @@ function Conflicts() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/analysis`)
+    const controller = new AbortController()
+
+    fetch(`${API_BASE}/api/analysis`, { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         if (!payload?.success) {
@@ -25,10 +27,15 @@ function Conflicts() {
         }
       })
       .catch((err) => {
+        if (err.name === 'AbortError') return
         console.error('Error loading conflicts:', err)
         setError(err.message)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
   }, [])
 
   const selectedAnalysis = analyses.find((analysis) => analysis.file === selectedFile)
@@ -101,6 +108,9 @@ function Conflicts() {
                     </button>
                     <button onClick={() => navigate(`/suggestions?file=${encodeURIComponent(selectedAnalysis.file)}`)}>
                       View Suggestions
+                    </button>
+                    <button onClick={() => navigate(`/context?file=${encodeURIComponent(selectedAnalysis.file)}`)}>
+                      View AI Context
                     </button>
                   </div>
                 </div>

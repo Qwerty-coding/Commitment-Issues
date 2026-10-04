@@ -35,6 +35,8 @@ function statusLabel(status) {
       return 'Complete'
     case 'below_threshold':
       return 'Below Threshold'
+    case 'manual_review':
+      return 'Manual Review'
     default:
       return status ? status.replace('_', ' ') : 'Proposed'
   }
@@ -395,6 +397,7 @@ function Suggestions() {
           const isApplied = currentStatus === 'applied' || currentStatus === 'validation_failed'
           const isReverted = currentStatus === 'reverted'
           const isStale = currentStatus === 'stale'
+          const isManualReview = currentStatus === 'manual_review' || item.status === 'manual_review'
           const inFlight = itemActions.inFlight || null
           const actionErr = itemActions.error || null
           const isStaleError = actionErr && (actionErr.includes('STALE_FILE') || actionErr.includes('stale'))
@@ -411,7 +414,7 @@ function Suggestions() {
                     <h3>{item.file}</h3>
                     <p>
                       {item.collision?.kind} {item.collision?.name} · Line {item.collision?.line}
-                      {item.regionId !== undefined ? ` · Region #${item.regionId}` : ''}
+                      {item.regionId ? ` · Region #${item.regionId}` : ''}
                       {item.revision ? ` · Rev ${item.revision}` : ''}
                     </p>
                     <p className="suggestion-provenance">
@@ -448,11 +451,20 @@ function Suggestions() {
                 </div>
               </div>
 
+              {/* MANUAL REVIEW BANNER */}
+              {isManualReview && (
+                <div className="stale-warning-banner" style={{ borderColor: 'rgba(234, 179, 8, 0.4)', background: 'rgba(234, 179, 8, 0.1)' }}>
+                  <div className="stale-warning-text">
+                    <strong>Manual Review Required:</strong> {item.errorMessage || 'Conflict region cannot be mapped to the working tree or language is unsupported. Automatic patch apply is disabled.'}
+                  </div>
+                </div>
+              )}
+
               {/* STALE FILE WARNING BANNER */}
               {(isStale || isStaleError) && (
                 <div className="stale-warning-banner">
                   <div className="stale-warning-text">
-                    <strong>⚠️ Stale File Warning:</strong> The working-tree file or conflict region has changed since
+                    <strong>Stale File Warning:</strong> The working-tree file or conflict region has changed since
                     analysis. Patches cannot be safely applied without fresh analysis.
                   </div>
                   <button
@@ -527,7 +539,7 @@ function Suggestions() {
                   <button
                     type="button"
                     className="action-btn preview-btn"
-                    disabled={Boolean(inFlight) || isApplied || isStale}
+                    disabled={Boolean(inFlight) || isApplied || isStale || isManualReview}
                     onClick={() => {
                       if (resolution?.previewDiff && itemActions.diffOpen) {
                         setItemAction(resId, { diffOpen: false })
@@ -548,13 +560,13 @@ function Suggestions() {
                     <button
                       type="button"
                       className={`action-btn approve-btn ${isApproved ? 'approve-btn-approved' : ''}`}
-                      disabled={Boolean(inFlight) || isApproved || isStale}
+                      disabled={Boolean(inFlight) || isApproved || isStale || isManualReview}
                       onClick={() => handleApprove(item, resId)}
                     >
                       {inFlight === 'approve'
                         ? 'Approving...'
                         : isApproved
-                          ? '✓ Explicitly Approved'
+                          ? (<><i className="fa-solid fa-check"></i> Explicitly Approved</>)
                           : 'Explicitly Approve'}
                     </button>
                   )}
@@ -564,7 +576,7 @@ function Suggestions() {
                     <button
                       type="button"
                       className="action-btn apply-btn"
-                      disabled={Boolean(inFlight) || !isApproved || isStale}
+                      disabled={Boolean(inFlight) || !isApproved || isStale || isManualReview}
                       title={!isApproved ? 'Apply is disabled until explicit approval' : 'Apply patch atomically'}
                       onClick={() => handleApply(item, resId)}
                     >
@@ -611,7 +623,7 @@ function Suggestions() {
                   )}
 
                   {/* REVERTED BADGE */}
-                  {isReverted && <span className="reverted-notice">✓ Patch was safely rolled back to original content.</span>}
+                  {isReverted && <span className="reverted-notice"><i className="fa-solid fa-check"></i> Patch was safely rolled back to original content.</span>}
                 </div>
               )}
             </div>

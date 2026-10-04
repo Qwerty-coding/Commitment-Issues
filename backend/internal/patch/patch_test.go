@@ -238,3 +238,94 @@ func TestBuild_ChangedContextRejection(t *testing.T) {
 		t.Errorf("expected STALE_FILE error, got %v", err)
 	}
 }
+
+func TestBuild_EmptyRegionIDRejection(t *testing.T) {
+	content := sampleConflictFile(1)
+	analysis, data := setupAnalysis(t, content)
+
+	res := resolutions.Resolution{
+		ID:          "res-1",
+		File:        "sample.js",
+		RegionID:    "", // empty region ID
+		Replacement: "valid replacement",
+	}
+
+	_, err := Build(analysis, res, data)
+	if err == nil {
+		t.Fatal("expected INVALID_PATCH error for empty region ID, got nil")
+	}
+	pe, ok := err.(*PatchError)
+	if !ok || pe.Code != resolutions.CodeInvalidPatch {
+		t.Errorf("expected INVALID_PATCH error, got %v", err)
+	}
+}
+
+func TestBuild_RejectsMarkersInReplacement(t *testing.T) {
+	content := sampleConflictFile(1)
+	analysis, data := setupAnalysis(t, content)
+
+	res := resolutions.Resolution{
+		ID:          "res-1",
+		File:        "sample.js",
+		RegionID:    "0",
+		Replacement: "<<<<<<< ours\ncode\n=======\nother\n>>>>>>> theirs",
+	}
+
+	_, err := Build(analysis, res, data)
+	if err == nil {
+		t.Fatal("expected error for markers in replacement, got nil")
+	}
+	pe, ok := err.(*PatchError)
+	if !ok || pe.Code != resolutions.CodeInvalidPatch {
+		t.Errorf("expected INVALID_PATCH error, got %v", err)
+	}
+}
+
+func TestBuild_RejectsPatchWithSyntaxError(t *testing.T) {
+	content := sampleConflictFile(1)
+	analysis, data := setupAnalysis(t, content)
+
+	res := resolutions.Resolution{
+		ID:          "res-1",
+		File:        "sample.js",
+		RegionID:    "0",
+		Replacement: "function (( broken {",
+	}
+
+	_, err := Build(analysis, res, data)
+	if err == nil {
+		t.Fatal("expected syntax error rejection, got nil")
+	}
+	pe, ok := err.(*PatchError)
+	if !ok || pe.Code != resolutions.CodeInvalidPatch {
+		t.Errorf("expected INVALID_PATCH error, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "syntax error") {
+		t.Errorf("expected message mentioning syntax error, got: %s", pe.Message)
+	}
+}
+
+func TestBuild_UnsupportedLanguage_RequiresManualReview(t *testing.T) {
+	content := "// top\n<<<<<<< ours\nval = 1\n=======\nval = 2\n>>>>>>> theirs\n// bottom\n"
+	analysis, data := setupAnalysis(t, content)
+	analysis.File = "sample.xyz" // unknown extension
+
+	res := resolutions.Resolution{
+		ID:          "res-1",
+		File:        "sample.xyz",
+		RegionID:    "0",
+		Replacement: "val = 3",
+	}
+
+	result, err := Build(analysis, res, data)
+	if err != nil {
+		t.Fatalf("unexpected error for unsupported language: %v", err)
+	}
+	if !result.RequiresManualReview {
+		t.Errorf("expected RequiresManualReview to be true for unsupported language")
+	}
+	if !strings.Contains(result.ProposedContent, "val = 3") {
+		t.Errorf("replacement was not applied: %s", result.ProposedContent)
+	}
+}
+

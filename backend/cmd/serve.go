@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	ai "CommitIssues/internal/ai"
@@ -11,6 +14,7 @@ import (
 	"CommitIssues/internal/engine"
 	"CommitIssues/internal/git"
 	"CommitIssues/internal/runstate"
+	"CommitIssues/internal/validation"
 
 	"github.com/spf13/cobra"
 )
@@ -31,12 +35,16 @@ var serveCmd = &cobra.Command{
 		// run history) and stays env-driven, never hard-coded.
 		cfg := engine.DefaultConfig()
 		cfg.AI = ai.ConfigFromEnv()
+		cfg.Validation = validation.ConfigFromEnv()
 		if err := cfg.Validate(); err != nil {
 			return err
 		}
 
-		ctx, cancel := context.WithCancel(cmd.Context())
-		defer cancel()
+		// Cancellable server context: SIGINT/SIGTERM (or cmd.Context()
+		// cancellation) triggers a graceful HTTP shutdown with in-flight
+		// request draining inside api.StartGraphServer.
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
 
 		scanRoot := engine.ResolveScanRoot(targetPath)
 		fmt.Printf("Scanning repository for conflicts under %s...\n", scanRoot)
@@ -47,7 +55,12 @@ var serveCmd = &cobra.Command{
 		}
 
 		run := runstate.NewRun()
-		history := runstate.NewHistory(runstate.DefaultHistoryLimit)
+		if len(cfg.Validation.AllowList) > 0 {
+			run.SetValidationConfig(cfg.Validation)
+		}
+		// Durable history is opt-in via HISTORY_PERSIST_PATH; otherwise the store
+	// stays bounded and in-memory as before.
+	history := runstate.NewHistoryFromEnv(runstate.DefaultHistoryLimit)
 
 		if len(repoRoots) > 0 {
 			repoRoot := repoRoots[0]
@@ -98,8 +111,14 @@ var serveCmd = &cobra.Command{
 			}
 		}
 
+		// Capture AST cache statistics after processing so the API can surface
+		// them via /api/repository.
+		if cfg.ASTCache != nil {
+			run.SetCacheStats(cfg.ASTCache.Stats())
+		}
+
 		fmt.Printf("🚀 Starting Graph Server on http://localhost%s\n", port)
-		api.StartGraphServer(run, history, port)
+		api.StartGraphServer(ctx, run, history, port)
 		return nil
 	},
 }

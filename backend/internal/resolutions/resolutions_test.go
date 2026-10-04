@@ -44,10 +44,12 @@ func TestLifecycleStatuses_AreStable(t *testing.T) {
 	want := []string{
 		"proposed", "previewed", "approved", "applied",
 		"reverted", "stale", "failed", "validation_failed",
+		"manual_review",
 	}
 	got := []string{
 		StatusProposed, StatusPreviewed, StatusApproved, StatusApplied,
 		StatusReverted, StatusStale, StatusFailed, StatusValidationFailed,
+		StatusManualReview,
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -102,7 +104,7 @@ func TestErrorCodes_AreStable(t *testing.T) {
 		"RESOLUTION_NOT_FOUND", "NOT_APPROVED", "ALREADY_APPLIED",
 		"STALE_FILE", "INVALID_PATCH", "PATH_ESCAPE",
 		"REPOSITORY_MISMATCH", "APPROVAL_EXPIRED", "VALIDATION_FAILURE",
-		"ROLLBACK_FAILURE", "APPLY_IN_PROGRESS",
+		"ROLLBACK_FAILURE", "APPLY_IN_PROGRESS", "INVALID_TRANSITION",
 	}
 	got := []string{
 		string(CodeResolutionNotFound), string(CodeNotApproved),
@@ -110,11 +112,63 @@ func TestErrorCodes_AreStable(t *testing.T) {
 		string(CodeInvalidPatch), string(CodePathEscape),
 		string(CodeRepositoryMismatch), string(CodeApprovalExpired),
 		string(CodeValidationFailure), string(CodeRollbackFailure),
-		string(CodeApplyInProgress),
+		string(CodeApplyInProgress), string(CodeInvalidTransition),
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("error code %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestValidateTransition(t *testing.T) {
+	valid := [][2]string{
+		{StatusProposed, StatusProposed},
+		{StatusProposed, StatusPreviewed},
+		{StatusProposed, StatusApproved},
+		{StatusProposed, StatusStale},
+		{StatusProposed, StatusFailed},
+		{StatusProposed, StatusManualReview},
+		{StatusPreviewed, StatusPreviewed},
+		{StatusPreviewed, StatusApproved},
+		{StatusPreviewed, StatusStale},
+		{StatusPreviewed, StatusFailed},
+		{StatusApproved, StatusApproved},
+		{StatusApproved, StatusPreviewed},
+		{StatusApproved, StatusApplied},
+		{StatusApproved, StatusStale},
+		{StatusApproved, StatusFailed},
+		{StatusApplied, StatusApplied},
+		{StatusApplied, StatusValidationFailed},
+		{StatusApplied, StatusReverted},
+		{StatusApplied, StatusFailed},
+		{StatusValidationFailed, StatusReverted},
+		{StatusValidationFailed, StatusFailed},
+		{StatusManualReview, StatusStale},
+		{StatusManualReview, StatusFailed},
+	}
+	for _, pair := range valid {
+		if err := ValidateTransition(pair[0], pair[1]); err != nil {
+			t.Errorf("expected transition %s -> %s to be valid, got: %v", pair[0], pair[1], err)
+		}
+	}
+
+	invalid := [][2]string{
+		{StatusProposed, StatusApplied},
+		{StatusProposed, StatusReverted},
+		{StatusPreviewed, StatusApplied},
+		{StatusPreviewed, StatusReverted},
+		{StatusApplied, StatusApproved},
+		{StatusApplied, StatusProposed},
+		{StatusReverted, StatusApplied},
+		{StatusReverted, StatusApproved},
+		{StatusStale, StatusApplied},
+		{StatusStale, StatusApproved},
+		{StatusFailed, StatusApplied},
+	}
+	for _, pair := range invalid {
+		if err := ValidateTransition(pair[0], pair[1]); err == nil {
+			t.Errorf("expected transition %s -> %s to be invalid, got nil", pair[0], pair[1])
 		}
 	}
 }

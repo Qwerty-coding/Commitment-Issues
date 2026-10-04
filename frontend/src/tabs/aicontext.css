@@ -1,0 +1,149 @@
+.aicontext-page {
+  width: 100%;
+  min-height: calc(100vh - var(--navbar-height, 56px));
+  padding: 28px;
+  background-color: var(--bg, #f8f9fa);
+}
+
+.aicontext-subtitle {
+  margin-top: -8px;
+  margin-bottom: 24px;
+  color: #6e6e8d;
+}
+
+.aicontext-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+}
+
+.aicontext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aicontext-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid #dde2ea;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.aicontext-list-item.active,
+.aicontext-list-item:hover {
+  border-color: #6842d9;
+  background-color: #f1edff;
+}
+
+.aicontext-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 28px;
+  background: white;
+  border: 1px solid #dde2ea;
+  border-radius: 18px;
+}
+
+.aicontext-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.aicontext-stats {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  color: #555;
+}
+
+.aicontext-readme {
+  padding: 18px;
+  background: #f7f5ff;
+  border: 1px solid #e3dfff;
+  border-radius: 14px;
+}
+
+.aicontext-readme-note {
+  margin-top: -6px;
+  color: #6e6e8d;
+  font-size: 0.9rem;
+}
+
+.aicontext-readme-body {
+  margin: 0;
+  padding: 14px;
+  background: white;
+  border: 1px solid #e3dfff;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+  color: #43435f;
+}
+
+.aicontext-filelist {
+  margin: 0;
+  padding-left: 22px;
+  color: #43435f;
+}
+
+.aicontext-function-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.aicontext-function {
+  padding: 18px;
+  background: #f7f5ff;
+  border: 1px solid #e3dfff;
+  border-radius: 14px;
+}
+
+.aicontext-function-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  color: #43435f;
+  flex-wrap: wrap;
+}
+
+.aicontext-function-title {
+  font-weight: 700;
+}
+
+.aicontext-function-meta {
+  color: #6e6e8d;
+}
+
+.aicontext-code {
+  margin: 0;
+  padding: 14px;
+  background: #1e1e2f;
+  color: #e6e6ff;
+  border-radius: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.aicontext-raw summary {
+  cursor: pointer;
+  color: #6842d9;
+  font-weight: 600;
+  margin-bottom: 12px;
+}

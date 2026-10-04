@@ -40,6 +40,20 @@ Resolution strategy:
 
 Output ONLY valid JSON matching this schema: {"explanation": "string", "suggested_code": "string", "confidence_score": int}.`
 
+// toonPayloadNote is appended to the system prompt when the payload is
+// encoded in TOON (the default) so models know how to read it.
+const toonPayloadNote = "The user payload is in TOON format (token-oriented notation: YAML-like objects, CSV-like tabular arrays); read it as structured data."
+
+// systemPromptFor returns the system prompt for the given payload format.
+// Only the TOON format needs an explainer line; JSON payloads keep the
+// original prompt untouched.
+func systemPromptFor(payloadFormat string) string {
+	if payloadFormat == "toon" {
+		return defaultSystemPrompt + "\n" + toonPayloadNote
+	}
+	return defaultSystemPrompt
+}
+
 // ============================================================================
 // DYNAMIC PROVIDER REGISTRY
 //

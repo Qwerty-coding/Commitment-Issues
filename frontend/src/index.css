@@ -1,0 +1,23 @@
+/* Global design tokens + base styles. Every tab stylesheet derives its brand
+   color, background and card border from these variables. */
+
+:root {
+  --navbar-height: 56px;
+  --brand: #6d3df5;
+  --brand-soft: #f0eaff;
+  --bg: #f8f9fb;
+  --card-border: #e1e4e8;
+  --radius: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  color: #101828;
+  -webkit-font-smoothing: antialiased;
+}

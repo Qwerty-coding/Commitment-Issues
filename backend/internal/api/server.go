@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	ai "CommitIssues/internal/ai"
 	promptcontext "CommitIssues/internal/context"
@@ -42,11 +43,22 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	}{Code: code, Message: message}})
 }
 
+// ShutdownTimeout bounds how long in-flight requests are allowed to drain
+// during a graceful shutdown.
+const ShutdownTimeout = 10 * time.Second
+
 // StartGraphServer serves the API and static frontend using the supplied
 // run-scoped state and bounded run history. A nil run is treated as an empty
 // run; a nil history disables the history endpoint's data (it returns an
 // empty list rather than failing).
-func StartGraphServer(run *runstate.Run, history *runstate.History, addr string) {
+//
+// The server shuts down gracefully when ctx is cancelled: it stops accepting
+// new connections and waits (bounded by ShutdownTimeout) for in-flight
+// requests to finish. Passing a nil ctx is treated as context.Background().
+func StartGraphServer(ctx context.Context, run *runstate.Run, history *runstate.History, addr string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if run == nil {
 		run = runstate.NewRun()
 	}
@@ -55,10 +67,26 @@ func StartGraphServer(run *runstate.Run, history *runstate.History, addr string)
 	}
 
 	mux := NewHandler(run, history)
+	srv := &http.Server{Addr: addr, Handler: mux}
 
 	fmt.Printf("listening on http://localhost%s\n", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Printf("Graph server error: %v\n", err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Graceful shutdown: drain in-flight requests within a bounded window.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			fmt.Printf("Graph server shutdown error: %v\n", err)
+		}
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Printf("Graph server error: %v\n", err)
+		}
 	}
 }
 
@@ -105,10 +133,13 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 
 	mux.HandleFunc("/api/repository", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// CacheStats is surfaced alongside repository metadata so operators can
+		// observe AST cache hit/miss behaviour without an extra endpoint.
 		writeJSON(w, http.StatusOK, struct {
-			Success bool               `json:"success"`
-			Data    RepositoryMetadata `json:"data"`
-		}{Success: true, Data: run.GetRepositoryMetadata()})
+			Success    bool               `json:"success"`
+			Data       RepositoryMetadata `json:"data"`
+			CacheStats interface{}        `json:"cacheStats,omitempty"`
+		}{Success: true, Data: run.GetRepositoryMetadata(), CacheStats: run.GetCacheStats()})
 	})
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +224,9 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 	// Phase 5: resolution endpoints and analysis refresh.
 	registerResolutionHandlers(mux, run)
 	handleAnalysisRefresh(mux, run)
+
+	// Phase 4B: commit and repository comparison endpoints.
+	registerCompareHandlers(mux, run)
 
 	return mux
 }

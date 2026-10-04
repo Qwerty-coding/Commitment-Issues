@@ -39,6 +39,9 @@ const (
 	// StatusValidationFailed marks a resolution that was applied but
 	// whose post-apply validation failed.
 	StatusValidationFailed = "validation_failed"
+	// StatusManualReview marks a resolution requiring manual review because
+	// the conflict region cannot be safely mapped or language is unsupported.
+	StatusManualReview = "manual_review"
 )
 
 // Approval statuses of a resolution. Approval is explicit and expires
@@ -78,6 +81,8 @@ const (
 
 // Audit event types. Events are immutable once recorded.
 const (
+	// EventProposed records explicit creation or proposal of a resolution.
+	EventProposed = "proposed"
 	// EventPreviewed records read-only preview generation.
 	EventPreviewed = "previewed"
 	// EventApproved records explicit user approval.
@@ -152,6 +157,8 @@ const (
 	// CodeApplyInProgress indicates another apply for the same
 	// resolution is still in flight.
 	CodeApplyInProgress ErrorCode = "APPLY_IN_PROGRESS"
+	// CodeInvalidTransition indicates an invalid lifecycle state transition.
+	CodeInvalidTransition ErrorCode = "INVALID_TRANSITION"
 )
 
 // Resolution is one patch proposal linked to a single run-scoped
@@ -193,6 +200,9 @@ type Resolution struct {
 	// ContentHash is the hash of the working-tree file at analysis
 	// time — the exact file that will be modified.
 	ContentHash string `json:"contentHash,omitempty"`
+	// OriginalContentHash is the SHA-256 hash of the working-tree file immediately
+	// before apply.
+	OriginalContentHash string `json:"originalContentHash,omitempty"`
 	// ContextHash is the hash of the conflict region plus its
 	// surrounding context lines at analysis time.
 	ContextHash string `json:"contextHash,omitempty"`
@@ -213,6 +223,9 @@ type Resolution struct {
 	// PostApplyHash is the SHA-256 hash of the working-tree file immediately
 	// after apply, used to detect subsequent edits before rollback.
 	PostApplyHash string `json:"postApplyHash,omitempty"`
+	// PostApplyContentHash is the SHA-256 hash of the working-tree file
+	// immediately after apply.
+	PostApplyContentHash string `json:"postApplyContentHash,omitempty"`
 	// Status is the lifecycle status (see the Status* constants).
 	Status string `json:"status"`
 	// ApprovalStatus is the explicit approval state (none, approved,
@@ -221,6 +234,12 @@ type Resolution struct {
 	// ValidationStatus is the post-apply validation state (see the
 	// Validation* constants).
 	ValidationStatus string `json:"validationStatus,omitempty"`
+	// ValidationOutput is the captured stdout+stderr from post-apply validation.
+	ValidationOutput string `json:"validationOutput,omitempty"`
+	// ValidationExitCode is the process exit code from post-apply validation.
+	ValidationExitCode int `json:"validationExitCode,omitempty"`
+	// ValidationDuration is the runtime duration of the post-apply validation run.
+	ValidationDuration time.Duration `json:"validationDuration,omitempty"`
 	// ApprovedAt, AppliedAt and RevertedAt bound the explicit
 	// mutation timestamps (UTC, zero when not yet reached).
 	ApprovedAt time.Time `json:"approvedAt,omitempty"`
@@ -274,4 +293,50 @@ func NewID() string {
 		return fmt.Sprintf("res%016x", time.Now().UTC().UnixNano())
 	}
 	return hex.EncodeToString(buf)
+}
+
+// ValidateTransition checks if transitioning from fromStatus to toStatus is valid.
+func ValidateTransition(fromStatus, toStatus string) error {
+	if fromStatus == toStatus {
+		return nil
+	}
+	transitions := map[string]map[string]bool{
+		StatusProposed: {
+			StatusPreviewed:    true,
+			StatusApproved:     true,
+			StatusStale:        true,
+			StatusFailed:       true,
+			StatusManualReview: true,
+		},
+		StatusPreviewed: {
+			StatusApproved:     true,
+			StatusStale:        true,
+			StatusFailed:       true,
+			StatusManualReview: true,
+		},
+		StatusApproved: {
+			StatusPreviewed: true,
+			StatusApplied:   true,
+			StatusStale:     true,
+			StatusFailed:    true,
+		},
+		StatusApplied: {
+			StatusValidationFailed: true,
+			StatusReverted:         true,
+			StatusFailed:           true,
+		},
+		StatusValidationFailed: {
+			StatusReverted: true,
+			StatusFailed:   true,
+		},
+		StatusManualReview: {
+			StatusStale:  true,
+			StatusFailed: true,
+		},
+	}
+	allowed, ok := transitions[fromStatus]
+	if !ok || !allowed[toStatus] {
+		return fmt.Errorf("invalid lifecycle transition from %s to %s", fromStatus, toStatus)
+	}
+	return nil
 }

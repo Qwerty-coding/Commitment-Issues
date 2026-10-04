@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	ai "CommitIssues/internal/ai"
@@ -25,16 +26,20 @@ func formatDuration(d time.Duration) string {
 }
 
 var (
-	apiKey      string
-	provider    string
-	modelName   string
-	baseURL     string
-	threshold   int
-	concurrency int
-	debug       bool
-	timeout     time.Duration
-	retries     int
-	aiTimeout   time.Duration
+	apiKey         string
+	provider       string
+	modelName      string
+	baseURL        string
+	threshold      int
+	concurrency    int
+	debug          bool
+	timeout        time.Duration
+	retries        int
+	aiRetryBackoff time.Duration
+	aiTimeout      time.Duration
+	payloadFormat  string
+	readmeContext  bool
+	readmeMaxBytes int
 )
 
 var resolveCmd = &cobra.Command{
@@ -60,10 +65,20 @@ var resolveCmd = &cobra.Command{
 		// providers/models are never switched silently.
 		cfg.AI = buildAIConfigFromFlags(cmd)
 
+		// README pre-context: CLI flags override env/defaults when explicitly
+		// set, preserving the flags > env > defaults invariant.
+		if cmd.Flags().Changed("readme-context") {
+			cfg.ReadmeContext = readmeContext
+		}
+		if cmd.Flags().Changed("readme-max-bytes") {
+			cfg.ReadmeMaxBytes = readmeMaxBytes
+		}
+
 		// The pipeline-level confidence threshold keeps its Phase 1 meaning
 		// and validation; it also drives suggestion statuses.
 		cfg.ConfidenceThreshold = cfg.AI.ConfidenceThreshold
 		cfg.Timeout = timeout
+
 
 		// Configuration is validated before any scanning begins so invalid
 		// settings can never start analysis or deadlock the semaphore.
@@ -130,7 +145,15 @@ func buildAIConfigFromFlags(cmd *cobra.Command) ai.Config {
 	cfg := ai.ConfigFromEnv()
 	flags := cmd.Flags()
 	if flags.Changed("provider") {
-		cfg.Provider = provider
+		cfg.Provider = strings.ToLower(strings.TrimSpace(provider))
+		// ConfigFromEnv baked in the Ollama fallback defaults because
+		// AI_PROVIDER was unset. Re-apply the selected provider's
+		// defaults for every field the user did not explicitly set via
+		// the environment, so `--provider gemini` uses gemini-3.5-flash
+		// and Google's endpoint instead of the Ollama model and base
+		// URL. Env-set fields are preserved and the flags applied below
+		// still win, keeping flags > environment > defaults intact.
+		cfg = cfg.ApplyProviderDefaults(cfg.Provider)
 	}
 	if flags.Changed("model") {
 		cfg.Model = modelName
@@ -150,6 +173,12 @@ func buildAIConfigFromFlags(cmd *cobra.Command) ai.Config {
 	if flags.Changed("ai-timeout") {
 		cfg.RequestTimeout = aiTimeout
 	}
+	if flags.Changed("ai-retry-backoff") {
+		cfg.RetryBackoff = aiRetryBackoff
+	}
+	if flags.Changed("payload-format") {
+		cfg.PayloadFormat = strings.ToLower(strings.TrimSpace(payloadFormat))
+	}
 	return cfg
 }
 
@@ -163,6 +192,11 @@ func init() {
 	resolveCmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "Overall analysis timeout (must be > 0)")
 	resolveCmd.Flags().IntVar(&retries, "retries", ai.DefaultRetryCount, "Retries per AI request for transient failures (env: AI_RETRIES)")
 	resolveCmd.Flags().DurationVar(&aiTimeout, "ai-timeout", ai.DefaultRequestTimeout, "Per-request AI timeout (env: AI_TIMEOUT)")
+	resolveCmd.Flags().DurationVar(&aiRetryBackoff, "ai-retry-backoff", ai.DefaultRetryBackoff, "Initial exponential retry backoff (env: AI_RETRY_BACKOFF)")
+	resolveCmd.Flags().StringVar(&payloadFormat, "payload-format", ai.DefaultPayloadFormat, "AI payload encoding: toon or json (env: AI_PAYLOAD_FORMAT)")
 	resolveCmd.Flags().BoolVar(&debug, "debug", false, "Enable verbose resolve pipeline logging")
+	resolveCmd.Flags().BoolVar(&readmeContext, "readme-context", true, "Include repo README excerpt in AI prompt context (env: AI_README_CONTEXT)")
+	resolveCmd.Flags().IntVar(&readmeMaxBytes, "readme-max-bytes", engine.DefaultReadmeMaxBytes, "Maximum bytes of README to include (env: AI_README_MAX_BYTES)")
 	rootCmd.AddCommand(resolveCmd)
 }
+

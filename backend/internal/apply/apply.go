@@ -219,10 +219,16 @@ func Apply(
 
 	// ── Step 9: record applied event and update resolution ────────────────
 	now := time.Now().UTC()
+	prevStatus := res.Status
 	res.Status = resolutions.StatusApplied
 	res.AppliedAt = now
 	res.PreApplyContent = previewResult.OriginalContent
+	res.OriginalContentHash = wtCheck.CurrentHash
+	if res.ContentHash == "" {
+		res.ContentHash = wtCheck.CurrentHash
+	}
 	res.PostApplyHash = expectedPostHash
+	res.PostApplyContentHash = expectedPostHash
 	res = run.SaveResolution(res)
 
 	run.RecordResolutionEvent(resolutions.ResolutionEvent{
@@ -232,13 +238,13 @@ func Apply(
 		File:           res.File,
 		Actor:          resolutions.ActorUser,
 		Type:           resolutions.EventApplied,
-		PreviousStatus: resolutions.StatusApproved,
+		PreviousStatus: prevStatus,
 		NewStatus:      resolutions.StatusApplied,
 	})
 
 	// ── Step 10: run validation (optional) ───────────────────────────────
 	var valResult *validation.Result
-	if validationCfg != nil {
+	if validationCfg != nil && len(validationCfg.AllowList) > 0 {
 		runner, runnerErr := validation.NewRunner(*validationCfg)
 		if runnerErr == nil {
 			run.RecordResolutionEvent(resolutions.ResolutionEvent{
@@ -251,7 +257,13 @@ func Apply(
 				PreviousStatus: resolutions.StatusApplied,
 				NewStatus:      resolutions.StatusApplied,
 			})
-			r := runner.Run(ctx, validationCfg.AllowList[0], nil)
+			cmdName := validationCfg.AllowList[0]
+			var cmdArgs []string
+			if len(validationCfg.Command) > 0 {
+				cmdName = validationCfg.Command[0]
+				cmdArgs = validationCfg.Command[1:]
+			}
+			r := runner.Run(ctx, cmdName, cmdArgs)
 			valResult = &r
 
 			eventType := resolutions.EventValidationPassed
@@ -267,9 +279,15 @@ func Apply(
 				// Validation failure does NOT revert automatically.
 				res.Status = resolutions.StatusValidationFailed
 				res.ValidationStatus = valStatus
+				res.ValidationOutput = r.Output
+				res.ValidationExitCode = r.ExitCode
+				res.ValidationDuration = r.Duration
 				res = run.SaveResolution(res)
 			} else {
 				res.ValidationStatus = valStatus
+				res.ValidationOutput = r.Output
+				res.ValidationExitCode = r.ExitCode
+				res.ValidationDuration = r.Duration
 				res = run.SaveResolution(res)
 			}
 
@@ -282,7 +300,7 @@ func Apply(
 				Type:           eventType,
 				PreviousStatus: resolutions.StatusApplied,
 				NewStatus:      res.Status,
-				ErrorCode:      func() string {
+				ErrorCode: func() string {
 					if r.Status != validation.StatusPassed {
 						return string(resolutions.CodeValidationFailure)
 					}
@@ -290,6 +308,9 @@ func Apply(
 				}(),
 			})
 		}
+	} else {
+		res.ValidationStatus = resolutions.ValidationNotRun
+		res = run.SaveResolution(res)
 	}
 
 	return ApplyResult{
@@ -308,10 +329,10 @@ type RollbackRequest struct {
 	// File is the repository-relative file path.
 	File string
 	// PreApplyContent is the exact original file bytes captured before apply.
-	// The rollback verifies the current file matches the post-apply hash
-	// stored in the resolution before overwriting.
+	// When omitted or nil, the server-side snapshot stored on the resolution is used.
 	PreApplyContent []byte
 	// PostApplyHash is the expected current-file hash (the result of apply).
+	// When empty, the stored PostApplyContentHash on the resolution is used.
 	// Rollback refuses if the file no longer matches this hash.
 	PostApplyHash string
 }
@@ -324,6 +345,15 @@ func Rollback(
 	run *runstate.Run,
 	req RollbackRequest,
 ) (resolutions.Resolution, error) {
+	// ── Step 1: acquire per-resolution in-flight lock ─────────────────────
+	if !run.TryBeginResolutionRevert(req.ResolutionID) {
+		return resolutions.Resolution{}, &safeguard.SafeError{
+			Code:    resolutions.CodeApplyInProgress,
+			Message: fmt.Sprintf("an apply or rollback is already in progress for resolution %s", req.ResolutionID),
+		}
+	}
+	defer run.EndResolutionRevert(req.ResolutionID)
+
 	// Load resolution.
 	res, ok := run.GetResolution(req.ResolutionID)
 	if !ok {
@@ -332,10 +362,10 @@ func Rollback(
 			Message: fmt.Sprintf("resolution %s not found", req.ResolutionID),
 		}
 	}
-	if res.Status != resolutions.StatusApplied && res.Status != resolutions.StatusValidationFailed {
+	if err := resolutions.ValidateTransition(res.Status, resolutions.StatusReverted); err != nil {
 		return resolutions.Resolution{}, &safeguard.SafeError{
 			Code:    resolutions.CodeRollbackFailure,
-			Message: fmt.Sprintf("resolution %s is not in an applied state (status=%s)", res.ID, res.Status),
+			Message: fmt.Sprintf("resolution %s is not in a rollbackable state (status=%s): %v", res.ID, res.Status, err),
 		}
 	}
 
@@ -351,6 +381,9 @@ func Rollback(
 
 	postApplyHash := req.PostApplyHash
 	if postApplyHash == "" {
+		postApplyHash = res.PostApplyContentHash
+	}
+	if postApplyHash == "" {
 		postApplyHash = res.PostApplyHash
 	}
 	preApplyContent := req.PreApplyContent
@@ -365,7 +398,7 @@ func Rollback(
 	}
 
 	// Verify current file matches the expected post-apply hash before
-	// overwriting — refuse if there are unrelated user edits.
+	// overwriting — refuse if there are unrelated user edits or sequential changes.
 	if postApplyHash != "" {
 		currentHash, hashErr := fileutil.HashFile(absPath)
 		if hashErr != nil {
@@ -384,6 +417,7 @@ func Rollback(
 	}
 
 	// Record revert_started.
+	prevStatus := res.Status
 	run.RecordResolutionEvent(resolutions.ResolutionEvent{
 		ResolutionID:   res.ID,
 		RunID:          res.RunID,
@@ -391,7 +425,7 @@ func Rollback(
 		File:           res.File,
 		Actor:          resolutions.ActorUser,
 		Type:           resolutions.EventRevertStarted,
-		PreviousStatus: res.Status,
+		PreviousStatus: prevStatus,
 		NewStatus:      resolutions.StatusReverted,
 	})
 
@@ -409,7 +443,7 @@ func Rollback(
 			File:           res.File,
 			Actor:          resolutions.ActorSystem,
 			Type:           resolutions.EventFailed,
-			PreviousStatus: res.Status,
+			PreviousStatus: prevStatus,
 			NewStatus:      resolutions.StatusFailed,
 			ErrorCode:      string(resolutions.CodeRollbackFailure),
 		})
@@ -436,7 +470,7 @@ func Rollback(
 		File:           res.File,
 		Actor:          resolutions.ActorUser,
 		Type:           resolutions.EventReverted,
-		PreviousStatus: resolutions.StatusApplied,
+		PreviousStatus: prevStatus,
 		NewStatus:      resolutions.StatusReverted,
 	})
 

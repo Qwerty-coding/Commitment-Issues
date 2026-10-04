@@ -20,10 +20,12 @@ import (
 	"time"
 
 	ai "CommitIssues/internal/ai"
+	"CommitIssues/internal/cache"
 	promptcontext "CommitIssues/internal/context"
 	graph "CommitIssues/internal/graph"
 	"CommitIssues/internal/resolutions"
 	semantic "CommitIssues/internal/semantic"
+	"CommitIssues/internal/validation"
 )
 
 // FileKey builds the repository-safe key used for every per-file collection.
@@ -94,6 +96,9 @@ const (
 	StatusBelowThreshold = "below_threshold"
 	// StatusFailed marks a suggestion whose generation failed.
 	StatusFailed = "failed"
+	// StatusManualReview marks a suggestion whose conflict region cannot be mapped
+	// or requires manual review.
+	StatusManualReview = "manual_review"
 )
 
 // SuggestionKey builds the run-unique lookup key for one suggestion:
@@ -126,6 +131,14 @@ type Run struct {
 	resolutionInFlight map[string]struct{}
 	eventSeq           int64
 	repositoryMD       RepositoryMetadata
+	validationCfg      *validation.Config
+	// readmes stores the per-repository README excerpt keyed by repoRoot.
+	// Isolation matches the analyses map: identical repo roots in different
+	// runs never share state.
+	readmes map[string]string
+	// cacheStats holds the AST cache statistics captured after processing so
+	// the API can surface them. Nil until SetCacheStats is called.
+	cacheStats *cache.Stats
 }
 
 // NewRun creates a run with a unique identifier.
@@ -151,7 +164,9 @@ func NewRunWithID(id string) *Run {
 		resolutions:        make(map[string]resolutions.Resolution),
 		resolutionEvents:   make([]resolutions.ResolutionEvent, 0),
 		resolutionInFlight: make(map[string]struct{}),
+		readmes:            make(map[string]string),
 	}
+
 }
 
 func newRunID() string {
@@ -193,6 +208,54 @@ func (r *Run) GetRepositoryMetadata() RepositoryMetadata {
 	defer r.mu.RUnlock()
 	return r.repositoryMD
 }
+
+// ─── README excerpts ──────────────────────────────────────────────────────────
+
+// RegisterReadme stores the README excerpt for the given repository root.
+// Only the repo-root README is stored; subdirectory READMEs are not tracked.
+// Calling this multiple times for the same repoRoot is idempotent — the first
+// write wins so ProcessRepository can call it unconditionally before the worker
+// pool without races.
+func (r *Run) RegisterReadme(repoRoot, excerpt string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.readmes[repoRoot]; !exists {
+		r.readmes[repoRoot] = excerpt
+	}
+}
+
+// Readme returns the stored README excerpt for a repository root and whether
+// one was registered. An empty excerpt is valid (README absent or disabled).
+func (r *Run) Readme(repoRoot string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	v, ok := r.readmes[repoRoot]
+	return v, ok
+}
+
+// ─── Cache statistics ───────────────────────────────────────────────────────
+
+// SetCacheStats records the AST cache statistics for this run.
+func (r *Run) SetCacheStats(stats cache.Stats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copyStats := stats
+	r.cacheStats = &copyStats
+}
+
+// GetCacheStats returns the recorded AST cache statistics, or nil when none
+// were captured.
+func (r *Run) GetCacheStats() *cache.Stats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.cacheStats == nil {
+		return nil
+	}
+	copyStats := *r.cacheStats
+	return &copyStats
+}
+
+
 
 // ─── Analyses ────────────────────────────────────────────────────────────────
 

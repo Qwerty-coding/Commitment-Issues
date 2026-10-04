@@ -1,0 +1,79 @@
+[
+  {
+    "language": "python",
+    "file": "conflict.py",
+    "base": "def calculate(x):\n    return x + 1\n",
+    "ours": "def calculate(x):\n    return x + 2\n",
+    "theirs": "def calculate(x):\n    return x * 2\n"
+  },
+  {
+    "language": "javascript",
+    "file": "conflict.js",
+    "base": "function calculate(x) {\n  return x + 1;\n}\n",
+    "ours": "function calculate(x) {\n  return x + 2;\n}\n",
+    "theirs": "function calculate(x) {\n  return x * 2;\n}\n"
+  },
+  {
+    "language": "typescript",
+    "file": "conflict.ts",
+    "base": "export function calculate(x: number): number {\n  return x + 1;\n}\n",
+    "ours": "export function calculate(x: number): number {\n  return x + 2;\n}\n",
+    "theirs": "export function calculate(x: number): number {\n  return x * 2;\n}\n"
+  },
+  {
+    "language": "go",
+    "file": "conflict.go",
+    "base": "package demo\n\nfunc Calculate(x int) int {\n\treturn x + 1\n}\n",
+    "ours": "package demo\n\nfunc Calculate(x int) int {\n\treturn x + 2\n}\n",
+    "theirs": "package demo\n\nfunc Calculate(x int) int {\n\treturn x * 2\n}\n"
+  },
+  {
+    "language": "java",
+    "file": "Conflict.java",
+    "base": "public class Calculator {\n    public int calculate(int x) {\n        return x + 1;\n    }\n}\n",
+    "ours": "public class Calculator {\n    public int calculate(int x) {\n        return x + 2;\n    }\n}\n",
+    "theirs": "public class Calculator {\n    public int calculate(int x) {\n        return x * 2;\n    }\n}\n"
+  },
+  {
+    "language": "csharp",
+    "file": "Conflict.cs",
+    "base": "public class Calculator {\n    public int Calculate(int x) {\n        return x + 1;\n    }\n}\n",
+    "ours": "public class Calculator {\n    public int Calculate(int x) {\n        return x + 2;\n    }\n}\n",
+    "theirs": "public class Calculator {\n    public int Calculate(int x) {\n        return x * 2;\n    }\n}\n"
+  },
+  {
+    "language": "c",
+    "file": "conflict.c",
+    "base": "int calculate(int x) {\n    return x + 1;\n}\n",
+    "ours": "int calculate(int x) {\n    return x + 2;\n}\n",
+    "theirs": "int calculate(int x) {\n    return x * 2;\n}\n"
+  },
+  {
+    "language": "cpp",
+    "file": "conflict.cpp",
+    "base": "int calculate(int x) {\n    return x + 1;\n}\n",
+    "ours": "int calculate(int x) {\n    return x + 2;\n}\n",
+    "theirs": "int calculate(int x) {\n    return x * 2;\n}\n"
+  },
+  {
+    "language": "rust",
+    "file": "conflict.rs",
+    "base": "fn calculate(x: i32) -> i32 {\n    x + 1\n}\n",
+    "ours": "fn calculate(x: i32) -> i32 {\n    x + 2\n}\n",
+    "theirs": "fn calculate(x: i32) -> i32 {\n    x * 2\n}\n"
+  },
+  {
+    "language": "ruby",
+    "file": "conflict.rb",
+    "base": "class Calculator\n  def calculate(x)\n    x + 1\n  end\nend\n",
+    "ours": "class Calculator\n  def calculate(x)\n    x + 2\n  end\nend\n",
+    "theirs": "class Calculator\n  def calculate(x)\n    x * 2\n  end\nend\n"
+  },
+  {
+    "language": "php",
+    "file": "conflict.php",
+    "base": "<?php\nfunction calculate($x) {\n    return $x + 1;\n}\n",
+    "ours": "<?php\nfunction calculate($x) {\n    return $x + 2;\n}\n",
+    "theirs": "<?php\nfunction calculate($x) {\n    return $x * 2;\n}\n"
+  }
+]

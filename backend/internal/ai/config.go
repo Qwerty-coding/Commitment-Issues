@@ -27,6 +27,13 @@ const (
 	EnvMaxPromptSize       = "AI_MAX_PROMPT_BYTES"
 	EnvMaxResponseSize     = "AI_MAX_RESPONSE_BYTES"
 	EnvRetryBackoff        = "AI_RETRY_BACKOFF"
+	// EnvReadmeContext enables/disables README pre-context (default: true).
+	EnvReadmeContext = "AI_README_CONTEXT"
+	// EnvReadmeMaxBytes caps the README excerpt size in bytes (default: 4096).
+	EnvReadmeMaxBytes = "AI_README_MAX_BYTES"
+	// EnvPayloadFormat selects the serialization format for AI-bound payloads:
+	// "toon" (default) or "json" (fallback).
+	EnvPayloadFormat = "AI_PAYLOAD_FORMAT"
 	// EnvLegacyOllamaBaseURL keeps backward compatibility with the previously
 	// documented OLLAMA_BASE_URL variable for the Ollama provider.
 	EnvLegacyOllamaBaseURL = "OLLAMA_BASE_URL"
@@ -59,6 +66,10 @@ const (
 	DefaultMaxPromptSize = 512 * 1024
 	// DefaultMaxResponseSize bounds the accepted HTTP response body.
 	DefaultMaxResponseSize = 1024 * 1024
+	// DefaultPayloadFormat is the default serialization for AI-bound payloads.
+	// TOON is measurably smaller for the uniform arrays that dominate the
+	// payload (see `go run . bench`); "json" remains the per-run fallback.
+	DefaultPayloadFormat = "toon"
 	// DefaultRetryBackoff is the initial retry backoff; it grows exponentially
 	// and is capped by MaxRetryBackoff.
 	DefaultRetryBackoff = 500 * time.Millisecond
@@ -80,6 +91,9 @@ type Config struct {
 	ConfidenceThreshold int           `json:"confidenceThreshold"`
 	MaxPromptSize       int           `json:"maxPromptSize"`
 	MaxResponseSize     int           `json:"maxResponseSize"`
+	// PayloadFormat selects the encoding for AI-bound payloads: "toon"
+	// (default) or "json" (fallback). An empty value means the default.
+	PayloadFormat string `json:"payloadFormat,omitempty"`
 }
 
 // AIConfig is retained as an alias so existing call sites keep compiling
@@ -124,8 +138,18 @@ func Default(provider string) Config {
 			ConfidenceThreshold: DefaultConfidenceThreshold,
 			MaxPromptSize:       DefaultMaxPromptSize,
 			MaxResponseSize:     DefaultMaxResponseSize,
+			PayloadFormat:       DefaultPayloadFormat,
 		}
 	}
+}
+
+// EffectivePayloadFormat returns the configured payload format, defaulting to
+// TOON when unset (zero-value configs from older callers stay valid).
+func (c Config) EffectivePayloadFormat() string {
+	if strings.TrimSpace(c.PayloadFormat) == "" {
+		return DefaultPayloadFormat
+	}
+	return strings.ToLower(strings.TrimSpace(c.PayloadFormat))
 }
 
 // ConfigFromEnv builds the configuration from environment variables over
@@ -135,6 +159,11 @@ func Default(provider string) Config {
 //
 // Never silently switches providers or models: an explicitly configured value
 // is used as-is or validation fails.
+//
+// Note: the defaults are selected from AI_PROVIDER, so a provider chosen
+// only via a CLI flag (invisible to this package) must call
+// ApplyProviderDefaults afterwards to pick up that provider's model and
+// base URL defaults.
 func ConfigFromEnv() Config {
 	cfg := Default(os.Getenv(EnvProvider))
 	if v := strings.TrimSpace(os.Getenv(EnvProvider)); v != "" {
@@ -184,7 +213,43 @@ func ConfigFromEnv() Config {
 			cfg.RetryBackoff = d
 		}
 	}
+	if v := strings.TrimSpace(os.Getenv(EnvPayloadFormat)); v != "" {
+		cfg.PayloadFormat = strings.ToLower(v)
+	}
 	return cfg
+}
+
+// ApplyProviderDefaults re-applies the documented defaults of the given
+// provider for the model and base URL, but only for fields that were not
+// explicitly set through the environment (AI_MODEL, AI_BASE_URL, or the
+// legacy OLLAMA_BASE_URL for Ollama).
+//
+// ConfigFromEnv selects its defaults from AI_PROVIDER, so a provider chosen
+// only via a CLI flag — which this package cannot see — would otherwise keep
+// the Ollama fallback defaults (the documented Ollama model and
+// http://localhost:11434/v1). Callers that override Provider from a flag
+// must call this afterwards so every provider works with its own documented
+// defaults. Explicit flags must be applied after this call to preserve the
+// precedence flags > environment > defaults.
+func (c Config) ApplyProviderDefaults(provider string) Config {
+	d := Default(provider)
+	if strings.TrimSpace(os.Getenv(EnvModel)) == "" {
+		c.Model = d.Model
+	}
+	if !c.baseURLSetFromEnv(provider) {
+		c.BaseURL = d.BaseURL
+	}
+	return c
+}
+
+// baseURLSetFromEnv reports whether a base URL was explicitly configured
+// through AI_BASE_URL or, for Ollama, the legacy OLLAMA_BASE_URL variable.
+func (c Config) baseURLSetFromEnv(provider string) bool {
+	if strings.TrimSpace(os.Getenv(EnvBaseURL)) != "" {
+		return true
+	}
+	return strings.EqualFold(provider, DefaultProvider) &&
+		strings.TrimSpace(os.Getenv(EnvLegacyOllamaBaseURL)) != ""
 }
 
 // ConfigError is a structured, deterministic AI configuration error.
@@ -268,6 +333,15 @@ func (c Config) Validate() error {
 	}
 	if _, err := ValidateBaseURL(c.BaseURL, c.Provider); err != nil {
 		return err
+	}
+	switch c.EffectivePayloadFormat() {
+	case "toon", "json":
+	default:
+		return &ConfigError{
+			Field:   "PayloadFormat",
+			Value:   c.PayloadFormat,
+			Message: "payload format must be \"toon\" or \"json\"",
+		}
 	}
 	return nil
 }

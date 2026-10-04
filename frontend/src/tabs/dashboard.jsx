@@ -12,7 +12,9 @@ function Dashboard() {
   const [error, setError] = useState("")
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/repository`)
+    const controller = new AbortController()
+
+    fetch(`${API_BASE}/api/repository`, { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         const data = payload?.data || {}
@@ -21,10 +23,11 @@ function Dashboard() {
         setIncomingBranch(data.incomingBranch || "")
       })
       .catch((error) => {
+        if (error.name === 'AbortError') return
         console.log("Error fetching repository metadata", error)
       })
 
-    fetch(`${API_BASE}/api/analysis`)
+    fetch(`${API_BASE}/api/analysis`, { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         if (!payload?.success) {
@@ -33,10 +36,15 @@ function Dashboard() {
         setAnalysis(payload.data || [])
       })
       .catch((err) => {
+        if (err.name === 'AbortError') return
         console.error('Error fetching repository conflict analysis:', err)
         setError(err.message)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
   }, [])
 
   if (loading) {
@@ -58,7 +66,7 @@ function Dashboard() {
   return (
     <div className="dashboard-page">
       <div className="welcome-section">
-        <h1>Welcome back, Mahak 👋</h1>
+        <h1>Welcome back</h1>
         <p>Here are the AST diffs and conflicted files across your repo.</p>
       </div>
 

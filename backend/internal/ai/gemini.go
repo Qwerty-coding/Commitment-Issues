@@ -28,6 +28,8 @@ type GeminiResolver struct {
 	BaseURL string
 	// MaxResponseSize bounds the accepted HTTP response body.
 	MaxResponseSize int
+	// PayloadFormat selects TOON (default) or JSON for the user payload.
+	PayloadFormat string
 }
 
 func newGeminiResolver(cfg Config, client *http.Client) (Resolver, error) {
@@ -50,17 +52,25 @@ func newGeminiResolver(cfg Config, client *http.Client) (Resolver, error) {
 		Client:          client,
 		BaseURL:         strings.TrimRight(baseURL, "/"),
 		MaxResponseSize: cfg.MaxResponseSize,
+		PayloadFormat:   cfg.EffectivePayloadFormat(),
 	}, nil
 }
 
 func (g *GeminiResolver) ResolveCollision(ctx context.Context, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR) (*AIResolutionResponse, error) {
-	userPayload, _ := json.Marshal(collision)
+	format := g.PayloadFormat
+	if format == "" {
+		format = DefaultPayloadFormat
+	}
+	userPayload, err := encodeCollisionPayload(collision, format)
+	if err != nil {
+		return nil, NewError(CodeConfigInvalid, false, "failed to marshal collision payload: %v", err)
+	}
 
 	reqBody := map[string]any{
-		"systemInstruction": map[string]any{"parts": []map[string]string{{"text": defaultSystemPrompt}}},
+		"systemInstruction": map[string]any{"parts": []map[string]string{{"text": systemPromptFor(format)}}},
 		"contents": []map[string]any{
 			{"role": "user", "parts": []map[string]string{{"text": promptCtx.Context}}},
-			{"role": "user", "parts": []map[string]string{{"text": string(userPayload)}}},
+			{"role": "user", "parts": []map[string]string{{"text": userPayload}}},
 		},
 		"generationConfig": map[string]any{
 			"responseMimeType": "application/json",
