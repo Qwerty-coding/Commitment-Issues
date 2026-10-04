@@ -68,15 +68,30 @@ function Commitgraph() {
 
     const rootNodes = graph.nodes.filter((node) => node.data.status === 'file')
     // Deduplicate targets per source so repeated CALLS edges cannot fan out.
-    const childMap = graph.edges.reduce((acc, edge) => {
-      const source = edge.data.source
-      const target = edge.data.target
-      acc[source] = acc[source] || []
-      if (!acc[source].includes(target)) {
-        acc[source].push(target)
+    const childMap = {}
+    
+    // 1. Add AST structural hierarchy (parent -> child)
+    graph.nodes.forEach((node) => {
+      const parentId = node.data.parent
+      if (parentId) {
+        childMap[parentId] = childMap[parentId] || []
+        if (!childMap[parentId].includes(node.data.id)) {
+          childMap[parentId].push(node.data.id)
+        }
       }
-      return acc
-    }, {})
+    })
+
+    // 2. Add semantic CALLS edges
+    if (graph.edges) {
+      graph.edges.forEach((edge) => {
+        const source = edge.data.source
+        const target = edge.data.target
+        childMap[source] = childMap[source] || []
+        if (!childMap[source].includes(target)) {
+          childMap[source].push(target)
+        }
+      })
+    }
 
     const nodeById = graph.nodes.reduce((acc, node) => {
       acc[node.data.id] = node
