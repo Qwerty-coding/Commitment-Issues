@@ -32,8 +32,8 @@
 ------------------------- */
 
 .repository-card {
-    width: 90%;
-    max-width: 1000px;
+    width: 100%;
+    max-width: 1200px;
 
     background: white;
     border: 1px solid var(--card-border, #e1e4e8);
@@ -309,10 +309,11 @@
     justify-content: center;
     align-items: center;
     text-align: center;
-    padding: 24px;
+    padding: 48px 24px;
     background: white;
-    border: 1px solid var(--card-border, #e1e4e8);
-    border-radius: 12px;
+    border: 1px dashed var(--card-border, #e1e4e8);
+    border-radius: 16px;
+    grid-column: 1 / -1;
 }
 
 .empty-state h3 {

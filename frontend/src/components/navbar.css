@@ -1,9 +1,26 @@
-.subpart{
-    margin-left:10px;
+.subpart {
+    margin-left: 10px;
     margin-right: 10px;
-    justify-content:space-between;
+    display: flex;
+    gap: 16px;
+    align-items: center;
 }
 
-.subpart-div{
-    width:15%
+.subpart-div {
+    display: flex;
+    align-items: center;
+}
+
+button.navbar-toggle {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: background-color 0.2s;
+}
+
+button.navbar-toggle:hover {
+    background-color: rgba(255, 255, 255, 0.1);
 }

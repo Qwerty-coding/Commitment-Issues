@@ -67,6 +67,11 @@
   background: #6842d9;
   color: white;
   cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.conflict-detail-actions button:hover {
+  background: #5b36bf;
 }
 
 .conflict-summary {
