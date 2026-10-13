@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -418,6 +419,65 @@ func TestCache_Cancellation_DoesNotLeavePartialEntries(t *testing.T) {
 	}
 	if _, found := c.Get(key); found {
 		t.Fatalf("cache should not contain entry after cancelled request")
+	}
+}
+
+// The startup eviction pass must run even though the write-based size
+// estimate starts at 0: a pre-existing oversized DiskDir has to be trimmed
+// by New(), not deferred until new writes push the estimate over the
+// fast-path threshold.
+func TestCache_New_TrimsOversizedDiskDirAtStartup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cache_startup_trim_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	const maxDiskBytes = int64(1024)
+	// 8 pre-existing entries of 256 bytes each: 2048 bytes total, double
+	// the 1024-byte limit. scanDiskUsage evicts oldest-first down to 80%
+	// (819 bytes), so the remaining entries must fit within maxDiskBytes.
+	entryPayload := `{"entry":{"key":{"repoId":"repo-startup"}},"checksum":"x"}`
+	entryPayload += strings.Repeat(" ", 256-len(entryPayload))
+	for i := 0; i < 8; i++ {
+		name := fmt.Sprintf("preexisting-%04d.json", i)
+		if err := os.WriteFile(filepath.Join(tempDir, name), []byte(entryPayload), 0644); err != nil {
+			t.Fatalf("failed to seed disk cache file %s: %v", name, err)
+		}
+	}
+
+	cfg := cache.Config{
+		MaxEntries:    100,
+		EnableDisk:    true,
+		DiskDir:       tempDir,
+		MaxDiskBytes:  maxDiskBytes,
+		ParserVersion: "1.0.0",
+		SchemaVersion: "1.0.0",
+	}
+	c, err := cache.New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create disk cache: %v", err)
+	}
+
+	remaining, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatalf("failed to read disk cache dir: %v", err)
+	}
+
+	var totalSize int64
+	for _, e := range remaining {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("failed to stat %s: %v", e.Name(), err)
+		}
+		totalSize += info.Size()
+	}
+
+	if totalSize > maxDiskBytes {
+		t.Fatalf("startup scan did not trim oversized DiskDir: %d bytes remain, limit %d", totalSize, maxDiskBytes)
+	}
+	if c.Stats().Evictions == 0 {
+		t.Fatalf("expected startup scan to evict pre-existing entries")
 	}
 }
 

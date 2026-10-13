@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,6 +208,12 @@ func FindGitRepositoryRoots(ctx context.Context, rootDir string) ([]string, erro
 	return repoRoots, nil
 }
 
+// maxConflictScanBytes bounds how much of a candidate file is read while
+// scanning for inline conflict markers. Real conflict files keep their markers
+// near the top; beyond this limit the file is either enormous or a mislabeled
+// binary, and reading it whole would only waste memory and slow the walk.
+const maxConflictScanBytes = 4 * 1024 * 1024 // 4 MB
+
 // conflictedFileExtensions lists the extensions scanned for inline conflict
 // markers when the Git index reports no unmerged entries.
 var conflictedFileExtensions = map[string]struct{}{
@@ -281,14 +288,35 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 			return nil
 		}
 
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
+		// Bound the read: conflict markers always appear near the top of the
+		// file, so a bounded prefix is enough to detect them without loading
+		// a multi-hundred-MB text file (or misreading a huge binary mislabeled
+		// with a text extension) into memory.
+		info, statErr := d.Info()
+		if statErr != nil {
+			return fmt.Errorf("failed to stat %s while scanning for conflicts: %w", rel, statErr)
+		}
+		readLen := info.Size()
+		if readLen > maxConflictScanBytes {
+			readLen = maxConflictScanBytes
+		}
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			return fmt.Errorf("failed to open %s while scanning for conflicts: %w", rel, openErr)
+		}
+		prefix := make([]byte, readLen)
+		n, readErr := io.ReadFull(file, prefix)
+		closeErr := file.Close()
+		if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
 			return fmt.Errorf("failed to read %s while scanning for conflicts: %w", rel, readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("failed to close %s while scanning for conflicts: %w", rel, closeErr)
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if result := ParseConflictRegions(string(data)); len(result.Regions) > 0 {
+		if result := ParseConflictRegions(string(prefix[:n])); len(result.Regions) > 0 {
 			files = append(files, rel)
 			seen[rel] = true
 		}

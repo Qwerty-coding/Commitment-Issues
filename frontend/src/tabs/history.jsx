@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './history.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 
 function formatTimestamp(value) {
   if (!value) return '—'
@@ -26,17 +26,13 @@ function History() {
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch(`${API_BASE}/api/history`, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(`${API_BASE}/api/history`, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load history')
-        }
         setRuns(payload.data || [])
         setError('')
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error loading history:', err)
         setError(err.message)
       })
@@ -148,7 +144,7 @@ function History() {
                 {(run.errorSummaries || []).length > 0 && (
                   <ul className="history-errors">
                     {run.errorSummaries.map((summary, index) => (
-                      <li key={index}>{summary}</li>
+                      <li key={`${summary.slice(0, 24)}-${index}`}>{summary}</li>
                     ))}
                   </ul>
                 )}

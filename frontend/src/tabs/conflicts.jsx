@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './conflicts.css'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function Conflicts() {
   const [analyses, setAnalyses] = useState([])
@@ -14,12 +13,8 @@ function Conflicts() {
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch(`${API_BASE}/api/analysis`, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(`${API_BASE}/api/analysis`, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load analysis')
-        }
         const data = payload.data || []
         setAnalyses(data)
         if (data.length > 0) {
@@ -27,7 +22,7 @@ function Conflicts() {
         }
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error loading conflicts:', err)
         setError(err.message)
       })
@@ -86,6 +81,8 @@ function Conflicts() {
               <button
                 key={analysis.file}
                 className={`conflict-list-item ${analysis.file === selectedFile ? 'active' : ''}`}
+                role="tab"
+                aria-selected={analysis.file === selectedFile}
                 onClick={() => setSelectedFile(analysis.file)}
               >
                 <span>{analysis.file}</span>

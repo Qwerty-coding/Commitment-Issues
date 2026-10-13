@@ -12,9 +12,9 @@ const links = [
     { to: '/history', label: 'History', icon: 'fa-solid fa-clock-rotate-left' },
 ]
 
-function Sidebar(){
-    return(
-    <div className="sidebar">
+function Sidebar({ open = false }) {
+    return (
+    <div id="app-sidebar" className={open ? 'sidebar' : 'sidebar sidebar-hidden'}>
         <div className="sidebar-title">
             MergeSolver
         </div>

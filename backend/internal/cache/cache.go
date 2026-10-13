@@ -159,6 +159,12 @@ type ASTCache struct {
 	evictions   atomic.Int64
 	corruptions atomic.Int64
 	fileLocks   sync.Map // key string -> *sync.Mutex
+
+	// diskBytesEstimate is a conservative lower bound on the on-disk cache
+	// size, updated on every write. Crossing 1/4 of MaxDiskBytes triggers
+	// the authoritative scanDiskUsage pass; until then the O(entries)
+	// scan is skipped on the common write path.
+	diskBytesEstimate atomic.Int64
 }
 
 // New creates a new ASTCache configured with the provided options.
@@ -184,11 +190,17 @@ func New(cfg Config) (*ASTCache, error) {
 		}
 	}
 
-	return &ASTCache{
+	c := &ASTCache{
 		config: cfg,
 		items:  make(map[string]*list.Element),
 		lru:    list.New(),
-	}, nil
+	}
+	// One authoritative scan at startup: pre-existing directory contents are
+	// not reflected in the write-based estimate (it starts at 0), so the
+	// eviction pass must run unconditionally — bypassing the estimate fast
+	// path — before the fast path can be trusted on subsequent writes.
+	c.scanDiskUsage()
+	return c, nil
 }
 
 // NewDefault returns an in-memory process-local ASTCache with standard bounds.
@@ -537,11 +549,32 @@ func (c *ASTCache) writeDiskEntry(entry *Entry) error {
 	}
 
 	// Enforce disk size limit and evict oldest if needed
+	c.diskBytesEstimate.Add(int64(len(data)))
 	c.enforceDiskLimits()
 	return nil
 }
 
+// enforceDiskLimits enforces the on-disk size limit on the write path.
+//
+// Fast path: while the size estimate of written payloads stays well under
+// the limit, writes cannot have pushed the directory over MaxDiskBytes, so
+// the O(entries) directory scan is skipped on the common write path. The
+// scan runs once the estimate crosses the threshold (or after any eviction
+// pass resets the estimate to 0, keeping scans rare).
 func (c *ASTCache) enforceDiskLimits() {
+	if c.diskBytesEstimate.Load() <= c.config.MaxDiskBytes/4 {
+		return
+	}
+	c.scanDiskUsage()
+}
+
+// scanDiskUsage is the authoritative eviction pass: it measures the actual
+// on-disk cache size and removes the oldest entries until the cache fits
+// within 80% of MaxDiskBytes. New() calls it directly because the
+// write-based estimate starts at 0 and cannot account for pre-existing
+// directory contents; enforceDiskLimits calls it once the estimate crosses
+// the fast-path threshold.
+func (c *ASTCache) scanDiskUsage() {
 	if c.config.MaxDiskBytes <= 0 || c.config.DiskDir == "" {
 		return
 	}
@@ -595,6 +628,10 @@ func (c *ASTCache) enforceDiskLimits() {
 			c.evictions.Add(1)
 		}
 	}
+
+	// Reset the estimate after a full authoritative scan so the fast path
+	// resumes and the next scan waits for another full batch of writes.
+	c.diskBytesEstimate.Store(0)
 }
 
 func computePayloadChecksum(entry *Entry) string {

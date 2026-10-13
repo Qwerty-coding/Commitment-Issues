@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './aicontext.css'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function AIContext() {
   const location = useLocation()
@@ -17,12 +16,8 @@ function AIContext() {
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch(`${API_BASE}/api/prompt`, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(`${API_BASE}/api/prompt`, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load prompt context')
-        }
         const data = Array.isArray(payload.data) ? payload.data : []
         setContexts(data)
         if (data.length > 0) {
@@ -31,7 +26,7 @@ function AIContext() {
         }
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error loading AI context:', err)
         setError(err.message)
       })
@@ -64,11 +59,13 @@ function AIContext() {
         <p>No prompt context available.</p>
       ) : (
         <div className="aicontext-grid">
-          <aside className="aicontext-list">
-            {contexts.map((ctx) => (
+          <aside className="aicontext-list" role="tablist" aria-label="Conflicted files">
+            {contexts.map((ctx, ctxIndex) => (
               <button
-                key={contextKey(ctx)}
+                key={`${contextKey(ctx)}-${ctxIndex}`}
                 className={`aicontext-list-item ${contextKey(ctx) === selectedKey ? 'active' : ''}`}
+                role="tab"
+                aria-selected={contextKey(ctx) === selectedKey}
                 onClick={() => setSelectedKey(contextKey(ctx))}
               >
                 <span>{contextKey(ctx)}</span>

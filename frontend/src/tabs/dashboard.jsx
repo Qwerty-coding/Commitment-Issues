@@ -1,7 +1,6 @@
 import './dashboard.css'
 import { useEffect, useState } from 'react'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 
 function Dashboard() {
   const [repoName, setRepoName] = useState("")
@@ -14,8 +13,8 @@ function Dashboard() {
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch(`${API_BASE}/api/repository`, { signal: controller.signal })
-      .then((response) => response.json())
+    // Metadata errors are non-fatal; analysis failures surface via state.
+    fetchJson(`${API_BASE}/api/repository`, { signal: controller.signal })
       .then((payload) => {
         const data = payload?.data || {}
         setRepoName(data.name || "")
@@ -23,26 +22,25 @@ function Dashboard() {
         setIncomingBranch(data.incomingBranch || "")
       })
       .catch((error) => {
-        if (error.name === 'AbortError') return
-        console.log("Error fetching repository metadata", error)
+        if (isAbort(error)) return
+        console.warn('Error fetching repository metadata:', error)
       })
 
-    fetch(`${API_BASE}/api/analysis`, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(`${API_BASE}/api/analysis`, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load repo conflict analysis')
-        }
         setAnalysis(payload.data || [])
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error fetching repository conflict analysis:', err)
         setError(err.message)
       })
       .finally(() => {
+        // Always reset loading — including when only the metadata fetch
+        // fails and the analysis fetch never resolves past abort.
         if (!controller.signal.aborted) setLoading(false)
       })
+
 
     return () => controller.abort()
   }, [])
@@ -114,8 +112,8 @@ function Dashboard() {
             <p>Run the serve command in a repository with active merge conflicts.</p>
           </div>
         ) : (
-          analysis.map((item) => (
-            <div className="analysis-card" key={item.file}>
+          analysis.map((item, fileIndex) => (
+            <div className="analysis-card" key={`${item.file}-${fileIndex}`}>
               <div className="analysis-card-header">
                 <div>
                   <h3>{item.file}</h3>
@@ -132,7 +130,7 @@ function Dashboard() {
                 <div className="analysis-preview">
                   <h4>AST Collision preview</h4>
                   {item.smartDiff.collisions.map((collision, index) => (
-                    <div className="preview-row" key={`${collision.name}-${index}`}>
+                    <div className="preview-row" key={`${collision.kind || 'item'}-${collision.name || collision.line || index}-${index}`}>
                       <strong>{collision.kind} {collision.name}</strong>
                       <span>{collision.type}</span>
                       <pre>{collision.base_content || collision.our_content || collision.their_content}</pre>

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './suggestions.css'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const PROVIDER_ERROR_CODES = new Set([
   'PROVIDER_UNAVAILABLE',
@@ -38,7 +37,8 @@ function statusLabel(status) {
     case 'manual_review':
       return 'Manual Review'
     default:
-      return status ? status.replace('_', ' ') : 'Proposed'
+      // Replace every underscore: 'multi_word_status' renders fully spaced.
+      return status ? status.split('_').join(' ') : 'Proposed'
   }
 }
 
@@ -71,6 +71,7 @@ function Suggestions() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [globalError, setGlobalError] = useState(null)
 
   // Local action state per resolution ID: { [resId]: { inFlight, error, diffOpen, confirmRevert } }
   const [actionState, setActionState] = useState({})
@@ -83,16 +84,7 @@ function Suggestions() {
       ? `${API_BASE}/api/suggestions?file=${encodeURIComponent(file)}`
       : `${API_BASE}/api/suggestions`
 
-    fetch(url, { signal: controller.signal })
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null)
-        if (!response.ok || !payload?.success) {
-          const failure = new Error(payload?.error?.message || `Request failed (${response.status})`)
-          failure.code = payload?.error?.code || (response.status === 504 ? 'TIMEOUT' : '')
-          throw failure
-        }
-        return payload
-      })
+    fetchJson(url, { signal: controller.signal })
       .then(async (payload) => {
         const items = payload.data || []
         setSuggestions(items)
@@ -105,9 +97,8 @@ function Suggestions() {
           : `${API_BASE}/api/resolutions`
 
         try {
-          const resResponse = await fetch(resUrl, { signal: controller.signal })
-          const resPayload = await resResponse.json()
-          if (resResponse.ok && resPayload?.success && Array.isArray(resPayload.data)) {
+          const resPayload = await fetchJson(resUrl, { signal: controller.signal })
+          if (Array.isArray(resPayload.data)) {
             const map = {}
             resPayload.data.forEach((r) => {
               if (r.id) map[r.id] = r
@@ -119,7 +110,7 @@ function Suggestions() {
         }
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error fetching suggestions:', err)
         setError({ message: err.message, code: err.code || '' })
       })
@@ -133,6 +124,9 @@ function Suggestions() {
   const retry = useCallback(() => {
     setLoading(true)
     setError(null)
+    setGlobalError(null)
+    // Clear stale revert-confirm state so a modal never survives a refetch.
+    setActionState({})
     setReloadKey((key) => key + 1)
   }, [])
 
@@ -256,8 +250,9 @@ function Suggestions() {
 
   // Handle Refresh Analysis (after stale-file error)
   const handleRefreshAnalysis = async (item) => {
+    setGlobalError(null)
     try {
-      await fetch(`${API_BASE}/api/analysis/refresh`, {
+      await fetchJson(`${API_BASE}/api/analysis/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -268,6 +263,9 @@ function Suggestions() {
       retry()
     } catch (err) {
       console.error('Refresh analysis failed:', err)
+      // Surface the failure so the user is not left staring at a stale file
+      // warning that silently does nothing when clicked.
+      setGlobalError({ message: err.message, code: err.code || '' })
     }
   }
 
@@ -340,6 +338,14 @@ function Suggestions() {
             ? `Preview, approve, apply, and rollback safe patches for ${file}.`
             : 'Preview, approve, apply, and rollback safe patches for merge conflicts.'}
         </p>
+        {globalError && (
+          <div className="suggestions-state suggestions-state-error" role="alert" aria-live="assertive">
+            <p><strong>Refresh analysis failed:</strong> {globalError.message}</p>
+            <button type="button" className="suggestions-retry" onClick={() => setGlobalError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
         {meta && (
           <div className="suggestions-meta">
             <span className="suggestions-chip">
@@ -513,19 +519,22 @@ function Suggestions() {
                           <strong>Read-Only Patch Unified Diff</strong>
                           <span className="diff-note">(Safe in-memory preview — no disk mutation)</span>
                         </div>
-                        <pre className="patch-diff-view">
+                        {/* A <pre> cannot legally contain <div> children; use a
+                            div with white-space:pre so the diff still renders with
+                            preserved whitespace without invalid HTML nesting. */}
+                        <div className="patch-diff-view" role="table" aria-label="Patch unified diff">
                           {(resolution.previewDiff || resolution.preview_diff).split('\n').map((line, lIdx) => {
                             let lineClass = 'diff-line'
                             if (line.startsWith('+') && !line.startsWith('+++')) lineClass += ' diff-line-add'
                             else if (line.startsWith('-') && !line.startsWith('---')) lineClass += ' diff-line-del'
                             else if (line.startsWith('@@')) lineClass += ' diff-line-hunk'
                             return (
-                              <div key={lIdx} className={lineClass}>
-                                {line || ' '}
+                              <div key={lIdx} className={lineClass} role="row">
+                                <span role="cell">{line || ' '}</span>
                               </div>
                             )
                           })}
-                        </pre>
+                        </div>
                       </div>
                     )}
                   </>

@@ -47,6 +47,24 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // during a graceful shutdown.
 const ShutdownTimeout = 10 * time.Second
 
+// setSecurityHeaders applies baseline defensive headers to every response.
+// The frontend is a static React SPA with no inline scripts beyond its built
+// bundles, so a strict-enough CSP improves XSS posture without breaking it.
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-XSS-Protection", "0")
+}
+
+// securityHeadersMiddleware wraps a handler with setSecurityHeaders.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // StartGraphServer serves the API and static frontend using the supplied
 // run-scoped state and bounded run history. A nil run is treated as an empty
 // run; a nil history disables the history endpoint's data (it returns an
@@ -228,7 +246,7 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 	// Phase 4B: commit and repository comparison endpoints.
 	registerCompareHandlers(mux, run)
 
-	return mux
+	return securityHeadersMiddleware(mux)
 }
 
 // handleSuggestions generates run-scoped AI suggestions using the

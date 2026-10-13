@@ -1,25 +1,23 @@
 import './navbar.css'
 import { useEffect, useState } from 'react'
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
-
-function Navbar({ toggleSidebar }) {
+function Navbar({ toggleSidebar, sidebarOpen }) {
     const [repoName, setRepoName] = useState("");
     const [currentBranch, setCurrentBranch] = useState("");
 
     useEffect(() => {
         const controller = new AbortController()
 
-        fetch(`${API_BASE}/api/repository`, { signal: controller.signal })
-            .then((response) => response.json())
+        fetchJson(`${API_BASE}/api/repository`, { signal: controller.signal })
             .then((payload) => {
                 const data = payload?.data || {}
                 setRepoName(data.name || "")
                 setCurrentBranch(data.currentBranch || "")
             })
             .catch((error) => {
-                if (error.name === 'AbortError') return
-                console.log("Error fetching repository metadata", error)
+                if (isAbort(error)) return
+                console.warn("Error fetching repository metadata", error)
             })
 
         return () => controller.abort()
@@ -33,6 +31,8 @@ function Navbar({ toggleSidebar }) {
                     className="navbar-brand navbar-toggle"
                     onClick={toggleSidebar}
                     aria-label="Toggle sidebar"
+                    aria-expanded={sidebarOpen}
+                    aria-controls="app-sidebar"
                 >
                     <i className="fa-solid fa-code-pull-request"></i> MergeSolver
                 </button>

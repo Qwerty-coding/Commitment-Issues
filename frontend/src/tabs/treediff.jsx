@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import './treediff.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 
 function Treediff() {
   const location = useLocation()
@@ -17,17 +17,13 @@ function Treediff() {
     const controller = new AbortController()
     const url = file ? `${API_BASE}/api/analysis?file=${encodeURIComponent(file)}` : `${API_BASE}/api/analysis`
 
-    fetch(url, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(url, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load analysis')
-        }
         const data = Array.isArray(payload.data) ? payload.data : [payload.data]
         setAnalyses(data)
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error loading TreeDiff:', err)
         setError(err.message)
       })

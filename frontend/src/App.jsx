@@ -9,6 +9,8 @@ import Commitgraph from './tabs/commitgraph'
 import History from './tabs/history'
 import AIContext from './tabs/aicontext'
 import Compare from './tabs/compare'
+import ErrorBoundary from './components/ErrorBoundary'
+import NotFound from './components/NotFound'
 
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useState } from 'react'
@@ -22,25 +24,30 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Navbar toggleSidebar={toggleSidebar} />
+      <ErrorBoundary>
+        <Navbar toggleSidebar={toggleSidebar} sidebarOpen={sidebarOpen} />
 
-      <div className="app-layout">
-        {sidebarOpen && <Sidebar />}
+        <div className="app-layout">
+          <Sidebar open={sidebarOpen} />
 
-        <div className="page-area">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/suggestions" element={<Suggestions />} />
-            <Route path="/conflicts" element={<Conflicts />} />
-            <Route path="/treediff" element={<Treediff />} />
-            <Route path="/commitgraph" element={<Commitgraph />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/context" element={<AIContext />} />
-            <Route path="/compare" element={<Compare />} />
-          </Routes>
+          <div className="page-area">
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/suggestions" element={<Suggestions />} />
+                <Route path="/conflicts" element={<Conflicts />} />
+                <Route path="/treediff" element={<Treediff />} />
+                <Route path="/commitgraph" element={<Commitgraph />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/context" element={<AIContext />} />
+                <Route path="/compare" element={<Compare />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
+          </div>
+
         </div>
-
-      </div>
+      </ErrorBoundary>
     </BrowserRouter>
   )
 }

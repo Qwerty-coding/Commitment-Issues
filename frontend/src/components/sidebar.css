@@ -8,6 +8,12 @@
     z-index: 1000;
 }
 
+/* Kept mounted (not unmounted) so the navbar's aria-controls
+   reference to #app-sidebar remains valid while collapsed. */
+.sidebar-hidden {
+    display: none;
+}
+
 .sidebar-title {
     font-size: 20px;
     font-weight: bold;

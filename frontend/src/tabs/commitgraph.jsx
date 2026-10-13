@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import './commitgraph.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 
 function Commitgraph() {
   const [graph, setGraph] = useState(null)
@@ -11,16 +11,12 @@ function Commitgraph() {
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch(`${API_BASE}/api/graph`, { signal: controller.signal })
-      .then((response) => response.json())
+    fetchJson(`${API_BASE}/api/graph`, { signal: controller.signal })
       .then((payload) => {
-        if (!payload?.success) {
-          throw new Error(payload?.error?.message || 'Failed to load graph')
-        }
         setGraph(payload.data)
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return
+        if (isAbort(err)) return
         console.error('Error loading graph:', err)
         setError(err.message)
       })
@@ -98,12 +94,11 @@ function Commitgraph() {
       return acc
     }, {})
 
-    // Semantic CALLS graphs can contain cycles (mutual recursion). Every node
-    // is rendered once; repeats degrade to a cycle marker instead of recursing
-    // forever ("Maximum call stack size exceeded").
-    const rendered = new Set()
-
-    const renderNode = (nodeId) => {
+    // Every node is rendered once per traversal; repeats degrade to a cycle
+    // marker instead of recursing forever ("Maximum call stack size exceeded").
+    // Each root starts with a fresh rendered set so sibling roots' children are
+    // not falsely flagged as cycles.
+    const renderFrom = (rendered, nodeId) => {
       if (rendered.has(nodeId)) {
         const seen = nodeById[nodeId]
         return (
@@ -135,7 +130,7 @@ function Commitgraph() {
 
           {childMap[nodeId]?.length ? (
             <ul className="tree-children">
-              {childMap[nodeId].map((childId) => renderNode(childId))}
+              {childMap[nodeId].map((childId) => renderFrom(rendered, childId))}
             </ul>
           ) : null}
         </li>
@@ -147,13 +142,13 @@ function Commitgraph() {
       <div className="graph-card">
         {hasRoot ? (
           <ul className="tree-view">
-            {rootNodes.map((node) => renderNode(node.data.id))}
+            {rootNodes.map((node) => renderFrom(new Set(), node.data.id))}
           </ul>
         ) : (
           <div className="graph-card-empty">
             <p>No file nodes found. Showing all nodes instead.</p>
             <ul className="tree-view">
-              {graph.nodes.map((node) => renderNode(node.data.id))}
+              {graph.nodes.map((node) => renderFrom(new Set(), node.data.id))}
             </ul>
           </div>
         )}
