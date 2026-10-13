@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"CommitIssues/internal/compare"
@@ -22,27 +21,20 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-// defaultBranch returns the branch name of the test repo's HEAD ("main" on
-// modern Git defaults, "master" on older ones). Tests never hard-code the
-// name: hard-coding one of them freezes on the other configuration.
+const defaultTestBranch = "main"
+
+// defaultBranch returns the canonical initial branch name of test repositories ("main").
+// Using a fixed canonical branch prevents race/state bugs where calling defaultBranch
+// while on a feature branch incorrectly returns the feature branch instead of the base.
 func defaultBranch(t *testing.T, repo string) string {
 	t.Helper()
-	branch := strings.TrimSpace(runGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
-	if branch == "" || branch == "HEAD" {
-		branch = strings.TrimSpace(runGit(t, repo, "branch", "--show-current"))
-	}
-	if branch == "" {
-		t.Fatalf("cannot determine default branch of test repo in %s", repo)
-	}
-	return branch
+	return defaultTestBranch
 }
 
-// initialBranch captures the test repo's initial branch name at setup time
-// (i.e. before any checkout switches HEAD onto a fixture branch). Use this
-// when a test later needs to compare against the repo's starting branch.
+// initialBranch captures the test repo's initial branch name at setup time.
 func initialBranch(t *testing.T, repo string) string {
 	t.Helper()
-	return defaultBranch(t, repo)
+	return defaultTestBranch
 }
 
 func setupTestGitRepo(t *testing.T) string {
@@ -53,7 +45,7 @@ func setupTestGitRepo(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	runGit(t, dir, "init")
+	runGit(t, dir, "init", "-b", defaultTestBranch)
 	runGit(t, dir, "config", "user.email", "test@commitissues.local")
 	runGit(t, dir, "config", "user.name", "Test User")
 

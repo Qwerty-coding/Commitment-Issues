@@ -392,6 +392,7 @@ function Suggestions() {
       ) : (
         suggestions.map((item, index) => {
           const confidence = item.resolution?.confidence_score ?? item.resolution?.confidence
+          const verification = item.verification || item.resolution?.verification || resolutionsMap[item.resolutionId]?.verification
           const resId = item.resolutionId || ''
           const resolution = resolutionsMap[resId] || null
           const itemActions = actionState[resId] || {}
@@ -435,10 +436,20 @@ function Suggestions() {
 
                 <div className="suggestion-badges">
                   {/* Objective Verification Badge */}
-                  <span className="verification-badge" title="Deterministic AST syntax check passes without error nodes">
-                    <ShieldCheck size={13} />
-                    Syntax Checked
-                  </span>
+                  {verification ? (
+                    <span
+                      className={`verification-badge ${verification.score < 70 ? 'verification-badge-warning' : ''}`}
+                      title={`Deterministic verification score: ${verification.score}/100 (${verification.status || 'evaluated'})`}
+                    >
+                      <ShieldCheck size={13} />
+                      Verified: {verification.score}/100
+                    </span>
+                  ) : (
+                    <span className="verification-badge" title="Deterministic AST syntax check passes without error nodes">
+                      <ShieldCheck size={13} />
+                      Syntax Checked
+                    </span>
+                  )}
 
                   {/* AI self-score: displayed as informational metadata only */}
                   {confidence !== undefined && confidence !== null && (
@@ -528,6 +539,19 @@ function Suggestions() {
                       <strong>Proposed Resolution Code</strong>
                       <pre>{item.resolution?.suggested_code || 'No suggested code available.'}</pre>
                     </div>
+
+                    {verification?.findings?.length > 0 && (
+                      <div className="verification-findings-box">
+                        <strong>Deterministic Verification Findings (-{100 - verification.score} pts):</strong>
+                        <ul>
+                          {verification.findings.map((f, fIdx) => (
+                            <li key={fIdx}>
+                              <span className="finding-check">{f.check}</span> (-{f.weight} pts): {f.details}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     {/* READ-ONLY UNIFIED DIFF VIEW */}
                     {itemActions.diffOpen && (resolution?.previewDiff || resolution?.preview_diff) && (

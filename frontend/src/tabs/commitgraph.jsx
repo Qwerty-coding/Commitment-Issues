@@ -8,6 +8,8 @@ function Commitgraph() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filterQuery, setFilterQuery] = useState('')
+  const [focusedNodeId, setFocusedNodeId] = useState(null)
+  const [focusLoading, setFocusLoading] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -27,6 +29,44 @@ function Commitgraph() {
 
     return () => controller.abort()
   }, [])
+
+  const handleFocusNode = async (nodeId) => {
+    if (focusedNodeId === nodeId) {
+      handleResetFocus()
+      return
+    }
+    setFocusLoading(true)
+    setError('')
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/graph/focus?id=${encodeURIComponent(nodeId)}`)
+      if (payload.data) {
+        setGraph(payload.data)
+        setFocusedNodeId(nodeId)
+      }
+    } catch (err) {
+      console.error('Error focusing node:', err)
+      setError(`Failed to focus node ${nodeId}: ${err.message}`)
+    } finally {
+      setFocusLoading(false)
+    }
+  }
+
+  const handleResetFocus = async () => {
+    setFocusLoading(true)
+    setError('')
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/graph`)
+      if (payload.data) {
+        setGraph(payload.data)
+        setFocusedNodeId(null)
+      }
+    } catch (err) {
+      console.error('Error reloading graph:', err)
+      setError(`Failed to reload graph: ${err.message}`)
+    } finally {
+      setFocusLoading(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -82,7 +122,9 @@ function Commitgraph() {
       return <div className="no-graph">No graph data available.</div>
     }
 
-    const rootNodes = graph.nodes.filter((node) => node.data.status === 'file')
+    const rootNodes = focusedNodeId
+      ? graph.nodes.filter((node) => node.data.id === focusedNodeId)
+      : graph.nodes.filter((node) => node.data.status === 'file')
     const childMap = {}
 
     // 1. AST structural hierarchy (parent -> child)
@@ -136,6 +178,14 @@ function Commitgraph() {
             <div className="node-header-row">
               <span className="node-kind-tag">{node.data.kind || 'Symbol'}</span>
               <span className="node-title">{node.data.label || node.data.id}</span>
+              <button
+                type="button"
+                className={`node-focus-btn ${focusedNodeId === node.data.id ? 'active' : ''}`}
+                onClick={() => handleFocusNode(node.data.id)}
+                title={focusedNodeId === node.data.id ? 'Click to reset view' : 'Focus on this symbol neighborhood'}
+              >
+                {focusedNodeId === node.data.id ? 'Focused' : 'Focus'}
+              </button>
               <span className="node-status-badge">{node.data.status}</span>
             </div>
           </div>
@@ -161,25 +211,27 @@ function Commitgraph() {
       )
     }
 
-    const hasRoot = rootNodes.length > 0
+    const rendered = new Set()
+    const primaryRoots = rootNodes.length > 0 ? rootNodes : graph.nodes
+    const primaryTree = primaryRoots.map((node) => renderFrom(rendered, node.data.id))
+    const remainingNodes = graph.nodes
+      .filter((node) => !rendered.has(node.data.id))
+      .map((node) => renderFrom(rendered, node.data.id))
+
     return (
       <div className="graph-card">
         <div className="graph-card-header">
           <Network size={18} />
-          <h2>AST Structural Hierarchy & Scope Nodes</h2>
+          <h2>
+            {focusedNodeId
+              ? `Focused Neighborhood: ${focusedNodeId}`
+              : 'AST Structural Hierarchy & Scope Nodes'}
+          </h2>
         </div>
-        {hasRoot ? (
-          <ul className="tree-view">
-            {rootNodes.map((node) => renderFrom(new Set(), node.data.id))}
-          </ul>
-        ) : (
-          <div className="graph-card-empty">
-            <p>No explicit file root nodes found. Showing all extracted AST nodes:</p>
-            <ul className="tree-view">
-              {graph.nodes.map((node) => renderFrom(new Set(), node.data.id))}
-            </ul>
-          </div>
-        )}
+        <ul className="tree-view">
+          {primaryTree}
+          {remainingNodes}
+        </ul>
       </div>
     )
   }
@@ -205,6 +257,16 @@ function Commitgraph() {
             }}
           />
         </div>
+        {focusedNodeId && (
+          <div className="focus-banner">
+            <span>
+              Focusing on symbol: <strong>{focusedNodeId}</strong> (showing direct neighborhood)
+            </span>
+            <button type="button" onClick={handleResetFocus} disabled={focusLoading}>
+              {focusLoading ? 'Resetting...' : 'Reset View'}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="graph-layout">

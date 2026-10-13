@@ -125,5 +125,44 @@ describe('Suggestions Tab', () => {
       expect(screen.getByText(/Ollama is unreachable/i)).toBeInTheDocument()
     })
   })
+
+  it('renders deterministic verification score and findings checklist when provided', async () => {
+    const verifiedSuggestion = [
+      {
+        ...mockSuggestions[0],
+        id: 'sug-2',
+        verification: {
+          score: 65,
+          status: 'needs_review',
+          findings: [
+            { check: 'markers', weight: 15, details: 'proposed content still contains conflict markers' },
+            { check: 'preservation', weight: 20, details: 'lost essential imports' },
+          ],
+        },
+      },
+    ]
+
+    globalThis.fetch = vi.fn((url) => {
+      const urlStr = String(url)
+      if (urlStr.includes('/api/suggestions')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: verifiedSuggestion, meta: { total: 1, failed: 0 } }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) })
+    })
+
+    render(
+      <MemoryRouter>
+        <Suggestions />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(screen.getByText(/Verified: 65\/100/i)).toBeInTheDocument())
+    expect(screen.getByText(/Deterministic Verification Findings/i)).toBeInTheDocument()
+    expect(screen.getByText(/proposed content still contains conflict markers/i)).toBeInTheDocument()
+    expect(screen.getByText(/lost essential imports/i)).toBeInTheDocument()
+  })
 })
 
