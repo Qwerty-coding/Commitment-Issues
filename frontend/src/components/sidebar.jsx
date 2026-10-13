@@ -1,40 +1,53 @@
 import "./sidebar.css"
 import { NavLink } from 'react-router-dom'
+import {
+    LayoutDashboard,
+    AlertTriangle,
+    GitCompare,
+    Sparkles,
+    Network,
+    Scale,
+    FileText,
+    History as HistoryIcon
+} from 'lucide-react'
 
 const links = [
-    { to: '/', label: 'Dashboard', icon: 'fa-solid fa-house', end: true },
-    { to: '/conflicts', label: 'Conflicts', icon: 'fa-solid fa-triangle-exclamation' },
-    { to: '/treediff', label: 'TreeDiff', icon: 'fa-solid fa-code-compare' },
-    { to: '/suggestions', label: 'Suggestions', icon: 'fa-solid fa-wand-magic-sparkles' },
-    { to: '/commitgraph', label: 'Commit Graph', icon: 'fa-solid fa-code-branch' },
-    { to: '/compare', label: 'Compare', icon: 'fa-solid fa-scale-balanced' },
-    { to: '/context', label: 'AI Context', icon: 'fa-solid fa-file-lines' },
-    { to: '/history', label: 'History', icon: 'fa-solid fa-clock-rotate-left' },
+    { to: '/', label: 'Dashboard', Icon: LayoutDashboard, end: true },
+    { to: '/conflicts', label: 'Conflicts', Icon: AlertTriangle },
+    { to: '/treediff', label: 'TreeDiff', Icon: GitCompare },
+    { to: '/suggestions', label: 'Suggestions', Icon: Sparkles },
+    { to: '/commitgraph', label: 'AST & Dependency Graph', Icon: Network },
+    { to: '/compare', label: 'Compare', Icon: Scale },
+    { to: '/context', label: 'AI Context', Icon: FileText },
+    { to: '/history', label: 'History', Icon: HistoryIcon },
 ]
 
 function Sidebar({ open = false }) {
     return (
-    <div id="app-sidebar" className={open ? 'sidebar' : 'sidebar sidebar-hidden'}>
-        <div className="sidebar-title">
-            MergeSolver
-        </div>
+        <aside id="app-sidebar" className={open ? 'sidebar' : 'sidebar sidebar-hidden'} aria-label="Sidebar navigation">
+            <div className="sidebar-header">
+                <span className="sidebar-title">Commitment-Issues</span>
+                <span className="sidebar-subtitle">Merge Conflict Resolver</span>
+            </div>
 
-        <ul>
-            {links.map((link) => (
-                <li key={link.to}>
-                    <NavLink
-                        to={link.to}
-                        end={link.end}
-                        className={({isActive}) => `sidebar-link${isActive ? ' active' : ''}`}
-                    >
-                        <i className={link.icon}></i>
-                        {link.label}
-                    </NavLink>
-                </li>
-            ))}
-        </ul>
-    </div>
+            <nav>
+                <ul className="sidebar-nav">
+                    {links.map(({ to, label, Icon, end }) => (
+                        <li key={to}>
+                            <NavLink
+                                to={to}
+                                end={end}
+                                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+                            >
+                                <Icon size={18} className="sidebar-icon" />
+                                <span>{label}</span>
+                            </NavLink>
+                        </li>
+                    ))}
+                </ul>
+            </nav>
+        </aside>
     )
 }
 
-export default Sidebar;
+export default Sidebar

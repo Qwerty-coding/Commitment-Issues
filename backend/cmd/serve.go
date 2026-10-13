@@ -25,7 +25,9 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the interactive AST dependency graph visualization server",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		targetPath := "../conflicts"
+		// Default uniformly to the current directory: running `serve` from the
+		// repository root previously looked for a non-existent ../conflicts.
+		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

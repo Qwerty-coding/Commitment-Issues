@@ -27,6 +27,23 @@ func runGitHelper(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// defaultTestBranch resolves the test repo's HEAD branch name so tests work
+// with both "main" (modern Git default) and "master" (legacy).
+func defaultTestBranch(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	branch, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("cannot resolve default branch: %v", err)
+	}
+	name := strings.TrimSpace(string(branch))
+	if name == "" || name == "HEAD" {
+		t.Fatalf("cannot determine default branch of %s", dir)
+	}
+	return name
+}
+
 func setupAPITestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "api_compare_test_*")
@@ -48,7 +65,7 @@ func setupAPITestGitRepo(t *testing.T) string {
 	_ = os.WriteFile(f, []byte("ours\n"), 0644)
 	runGitHelper(t, dir, "commit", "-am", "ours")
 
-	runGitHelper(t, dir, "checkout", "master")
+	runGitHelper(t, dir, "checkout", defaultTestBranch(t, dir))
 	runGitHelper(t, dir, "checkout", "-b", "b2")
 	_ = os.WriteFile(f, []byte("theirs\n"), 0644)
 	runGitHelper(t, dir, "commit", "-am", "theirs")

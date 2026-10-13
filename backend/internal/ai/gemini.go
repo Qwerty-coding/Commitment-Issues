@@ -68,9 +68,14 @@ func (g *GeminiResolver) ResolveCollision(ctx context.Context, collision semanti
 
 	reqBody := map[string]any{
 		"systemInstruction": map[string]any{"parts": []map[string]string{{"text": systemPromptFor(format)}}},
+		// Gemini's v1beta endpoint rejects consecutive same-role turns, so the
+		// context and the collision payload are merged into ONE user content
+		// item under a single "contents" entry.
 		"contents": []map[string]any{
-			{"role": "user", "parts": []map[string]string{{"text": promptCtx.Context}}},
-			{"role": "user", "parts": []map[string]string{{"text": userPayload}}},
+			{"role": "user", "parts": []map[string]string{
+				{"text": promptCtx.Context},
+				{"text": userPayload},
+			}},
 		},
 		"generationConfig": map[string]any{
 			"responseMimeType": "application/json",

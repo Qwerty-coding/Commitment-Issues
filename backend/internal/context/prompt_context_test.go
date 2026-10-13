@@ -94,6 +94,29 @@ func TestMergeImports_DedupesSortsAndSkipsEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContext_MethodsAndConstructorsIncluded(t *testing.T) {
+	// OOP symbols must reach the AI prompt, not be silently skipped.
+	method := parser.CodeElement{Name: "charge", Kind: "Method", Line: 3, Content: "func (e Engine) charge() {}"}
+	ctor := parser.CodeElement{Name: "NewEngine", Kind: "Constructor", Line: 7, Content: "func NewEngine() Engine"}
+	ours := parser.ASTContext{Functions: []parser.CodeElement{method, ctor}}
+	scope := semantic.SemanticGraph{Nodes: []semantic.SemanticNode{
+		{Kind: "Method", Name: "charge", Identity: semantic.SymbolIdentity(method)},
+		{Kind: "Constructor", Name: "NewEngine", Identity: semantic.SymbolIdentity(ctor)},
+	}}
+
+	ir := BuildPromptContext("repo", "", []string{"engine.go"}, scope, ours, parser.ASTContext{})
+
+	if len(ir.Functions) != 2 {
+		t.Fatalf("expected method and constructor in prompt functions, got %d: %+v", len(ir.Functions), ir.Functions)
+	}
+	if !strings.Contains(ir.Context, "### charge (Method, line 3)") {
+		t.Errorf("method missing from rendered context:\n%s", ir.Context)
+	}
+	if !strings.Contains(ir.Context, "### NewEngine (Constructor, line 7)") {
+		t.Errorf("constructor missing from rendered context:\n%s", ir.Context)
+	}
+}
+
 func TestBuildPromptContext_PopulatesImportsAndLanguageFence(t *testing.T) {
 	fn := parser.CodeElement{Name: "run", Kind: "Function", Line: 5, Content: "func run() {}"}
 	ours := parser.ASTContext{

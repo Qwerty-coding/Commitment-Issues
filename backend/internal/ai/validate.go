@@ -14,20 +14,26 @@ import (
 // *missing* field is distinguishable from an explicit empty/zero value during
 // schema validation. The canonical provider response is:
 //
-//	{"explanation": string, "suggested_code": string, "confidence_score": int}
+//	{"explanation": string, "suggested_code": string}
 //
+// confidence_score is tolerated when a provider emits it anyway (legacy
+// prompt or non-compliant model) but is NOT required and is NOT used for any
+// gating decision; the deterministic local verification score in
+// internal/verification governs suggestion status instead.
 // Unknown fields are ignored. camelCase API translation happens explicitly at
 // the API boundary; the internal schema is snake_case only.
 type aiResolutionWire struct {
 	Explanation     *string `json:"explanation"`
 	SuggestedCode   *string `json:"suggested_code"`
-	ConfidenceScore *int    `json:"confidence_score"`
+	ConfidenceScore *int    `json:"confidence_score,omitempty"`
 }
 
 // ValidateResponse enforces the canonical response schema:
 //   - explanation: required, non-empty
 //   - suggested_code: required, non-empty (for successful resolutions)
-//   - confidence_score: required, between 0 and 100
+//
+// confidence_score is optional and merely range-clamped when present; it is
+// never used for gating (see internal/verification).
 //
 // Invalid responses are typed, non-retryable errors: no amount of retrying
 // fixes a schema violation.
@@ -70,13 +76,12 @@ func parseJSONResponse(rawText string) (*AIResolutionResponse, error) {
 	if wire.SuggestedCode == nil {
 		return nil, NewError(CodeSchemaInvalid, false, "response schema invalid: suggested_code is required")
 	}
-	if wire.ConfidenceScore == nil {
-		return nil, NewError(CodeSchemaInvalid, false, "response schema invalid: confidence_score is required")
-	}
 	res := &AIResolutionResponse{
 		Explanation:   *wire.Explanation,
 		SuggestedCode: *wire.SuggestedCode,
-		Confidence:    *wire.ConfidenceScore,
+	}
+	if wire.ConfidenceScore != nil {
+		res.Confidence = *wire.ConfidenceScore
 	}
 	if err := ValidateResponse(res); err != nil {
 		return nil, err

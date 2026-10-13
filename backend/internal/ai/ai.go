@@ -30,15 +30,21 @@ type Resolver interface {
 type FactoryFunc func(cfg Config, client *http.Client) (Resolver, error)
 
 // Standard system prompt used across all providers.
+//
+// The model is asked to return ONLY the conflict-region replacement (not the
+// enclosing function or file), and is NEVER asked for a self-reported
+// confidence score: per docs/design_decisions.md (2026-10-05) a self-assessed
+// number is post-hoc rationalization, not measurement. A deterministic local
+// verification score (internal/verification) judges the result instead.
 const defaultSystemPrompt = `You are an expert code resolution engine. You resolve Git merge conflicts strictly at the structural node level. You will be provided with three versions of a single function or variable: Base, Ours, and Theirs.
 
 Resolution strategy:
 1. If the two changes are compatible, merge them together.
 2. If they are mutually exclusive, prefer the simplest solution that avoids duplicated logic and clearly states the trade-off in the explanation.
 3. Preserve the intent of both branches wherever possible.
-4. Rate confidence (0-100) based on how certain you are in the merge strategy.
+4. Return ONLY the replacement for the conflict lines between <<<<<<< and >>>>>>> — NOT the enclosing function, class or file. Never include conflict markers in the output.
 
-Output ONLY valid JSON matching this schema: {"explanation": "string", "suggested_code": "string", "confidence_score": int}.`
+Output ONLY valid JSON matching this schema: {"explanation": "string", "suggested_code": "string"}.`
 
 // toonPayloadNote is appended to the system prompt when the payload is
 // encoded in TOON (the default) so models know how to read it.

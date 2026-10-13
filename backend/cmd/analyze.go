@@ -13,7 +13,9 @@ var analyzeCmd = &cobra.Command{
 	Use:   "analyze [path]",
 	Short: "Analyze conflicts, generate AST diffs and JSON reports",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		targetPath := "conflicts"
+		// All commands default uniformly to the current directory; the explicit
+		// path argument overrides it.
+		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

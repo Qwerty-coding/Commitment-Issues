@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	git "CommitIssues/internal/git"
 )
@@ -166,9 +168,42 @@ func AtomicWrite(targetPath string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("fileutil: cannot close temp file %s: %w", tmpName, err)
 	}
-	if err := os.Rename(tmpName, targetPath); err != nil {
+	if err := renameWithFallback(tmpName, targetPath); err != nil {
 		return fmt.Errorf("fileutil: cannot rename %s -> %s: %w", tmpName, targetPath, err)
 	}
 	success = true
 	return nil
+}
+
+// renameWindowsRetries bounds the retry loop for transient Windows sharing
+// violations (antivirus/indexer briefly holding the target open).
+const renameWindowsRetries = 10
+
+// renameWindowsRetryDelay is the fixed backoff between rename retries; the
+// typical Defender/indexer lock clears within tens of milliseconds.
+const renameWindowsRetryDelay = 20 * time.Millisecond
+
+// renameWithFallback renames tmp onto target. On Windows, os.Rename fails
+// with "Access is denied" when the target has ANY open handle — antivirus
+// scanners, search indexers and editors commonly hold targets open for tens
+// of milliseconds. The fallback retries briefly, then removes the locked
+// target and renames into the now-free path (still atomic-in-practice for a
+// writer that already opened the handle, and strictly safer than failing the
+// whole apply). On non-Windows platforms this is a plain os.Rename.
+func renameWithFallback(tmpName, targetPath string) error {
+	err := os.Rename(tmpName, targetPath)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	for attempt := 0; attempt < renameWindowsRetries; attempt++ {
+		time.Sleep(renameWindowsRetryDelay)
+		if err = os.Rename(tmpName, targetPath); err == nil {
+			return nil
+		}
+	}
+	// Last resort: unlink the locked target and rename into place.
+	if removeErr := os.Remove(targetPath); removeErr != nil && !os.IsNotExist(removeErr) {
+		return err // surface the original rename failure
+	}
+	return os.Rename(tmpName, targetPath)
 }

@@ -231,13 +231,12 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 		})
 	})
 
-	for _, path := range []string{"/api/graph/expand", "/api/graph/collapse", "/api/graph/focus"} {
-		name := strings.TrimPrefix(path, "/api/graph/")
-		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", fmt.Sprintf("Graph %s is not implemented yet.", name))
-		})
-	}
+	// Graph inspection endpoints operate on the merged run graph. `focus`
+	// returns a node and its neighborhood; `expand` returns a node's direct
+	// neighbors (for lazy loading); `collapse` returns the graph minus the
+	// given node's subtree closure. All accept ?id=<nodeID> (GET) or
+	// JSON body {"id": "..."} (POST).
+	registerGraphInspectHandlers(mux, run)
 
 	// Phase 5: resolution endpoints and analysis refresh.
 	registerResolutionHandlers(mux, run)

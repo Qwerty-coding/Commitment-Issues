@@ -208,6 +208,11 @@ func findRegion(regions []git.ConflictRegion, regionID string) (git.ConflictRegi
 // (1-based, inclusive) in originalContent with replacement. All other content
 // is preserved verbatim, including other conflict regions.
 //
+// When the model returns the WHOLE enclosing block (e.g. the entire function)
+// while the conflict spans only its inner lines, the replacement is first
+// normalized back to the region-sized slice (see normalizeToConflictRegion)
+// so the splice can never duplicate the surrounding code.
+//
 // Returns ErrInvalidPatch when the line range is out of bounds or the region
 // no longer contains the expected markers.
 func applyRegionReplacement(originalContent string, region git.ConflictRegion, replacement string) (string, error) {
@@ -261,6 +266,10 @@ func applyRegionReplacement(originalContent string, region git.ConflictRegion, r
 			Message: fmt.Sprintf("line %d no longer contains the conflict end marker", region.EndLine),
 		}
 	}
+
+	// Filter out conflict markers + duplicated enclosing code from the
+	// replacement before splicing (see above).
+	replacement = normalizeToConflictRegion(replacement, region, lines)
 
 	// Build the result: prefix + replacement lines + suffix.
 	prefix := lines[:region.StartLine-1]
@@ -389,4 +398,189 @@ func buildUnifiedDiff(filename, original, proposed string) string {
 		return "(no changes)\n"
 	}
 	return sb.String()
+}
+
+// normalizeToConflictRegion guards against the AI returning the WHOLE
+// enclosing block (e.g. the entire function) while the conflict region spans
+// only the inner lines between the markers. Splicing such a replacement into
+// the region would duplicate the surrounding code and corrupt the file.
+//
+// Detection: the replacement is considered an enclosing-block replacement
+// when the original file content BEFORE the region contains a line that is
+// also the first non-empty line of the replacement (e.g. the function's
+// original signature), with that context line located strictly before the
+// region. In that case the replacement's slice starting at the first context
+// match and ending at the matching context line AFTER the region (or EOF) is
+// cut back to what lies strictly inside the enclosing block's braces around
+// the region — returned to the caller as just the region replacement.
+//
+// When no such duplication is detectable, replacement is returned unchanged.
+func normalizeToConflictRegion(replacement string, region git.ConflictRegion, allLines []string) string {
+	replacementLines := strings.Split(replacement, "\n")
+	firstRep := firstNonEmptyLine(replacementLines)
+	if firstRep < 0 {
+		return replacement
+	}
+	if region.StartLine <= 1 {
+		return replacement
+	}
+
+	// Simplest robust guard: if the replacement's first/last non-empty lines
+	// both also appear as context lines around the region in the ORIGINAL
+	// file, and the replacement contains the region's own content, then the
+	// model reproduced the enclosing function. Slice it back to the section
+	// between the enclosing block's first and last context lines, exclusive.
+	// The inner body is derived from the replacement (not from the old file)
+	// while the enclosing context is already present in the file, so splicing
+	// the enclosing block would duplicate it.
+	lastRep := lastNonEmptyLine(replacementLines)
+	if lastRep < firstRep || lastRep == firstRep {
+		return replacement
+	}
+	firstRepLine := strings.TrimSpace(replacementLines[firstRep])
+	lastRepLine := strings.TrimSpace(replacementLines[lastRep])
+	if firstRepLine == "" || lastRepLine == "" {
+		return replacement
+	}
+	beforeIdx := findLineBefore(allLines, firstRepLine, region.StartLine-1)
+	afterIdx := findLineAfter(allLines, lastRepLine, region.EndLine, len(allLines))
+	if beforeIdx < 0 || afterIdx < 0 {
+		// The first/last replacement lines are not context duplicates around
+		// the region in the original file — this is a genuine region-sized
+		// replacement; splice it as-is.
+		return replacement
+	}
+
+	// Find the enclosing block boundaries: the replacement (whole block)
+	// spans [beforeIdx+1 .. afterIdx+1] in 1-based terms — i.e. it duplicates
+	// the file content between the context lines. The region replacement is
+	// everything strictly inside the block: remove the first context line, the
+	// last context line, and any duplicate of the original region content
+	// already inside the AI's block so the merged result keeps exactly one
+	// copy of the resolved body.
+	inner := replacementLines[firstRep+1 : lastRep]
+	inner = trimTopLevelBraces(inner)
+
+	// Drop a verbatim copy of the old region content inside the replacement:
+	// an enclosing replacement often reproduces ours/theirs verbatim.
+	inner = dropEmbeddedRegion(inner, region)
+
+	if len(inner) == 0 {
+		return replacement // nothing left: bail out unchanged (invalid content)
+	}
+	return strings.Join(inner, "\n")
+}
+
+// dropEmbeddedRegion removes a verbatim copy of the old ours-side region
+// content (a full duplicate of lines the file already contains around the
+// region) from the replacement inner slice, so an enclosing replacement
+// doesn't duplicate the unresolved ours-side lines.
+func dropEmbeddedRegion(inner []string, region git.ConflictRegion) []string {
+	oursLines := strings.Split(region.Ours, "\n")
+	if len(oursLines) < 3 || len(inner) < len(oursLines) {
+		return inner
+	}
+	for start := 0; start+len(oursLines) <= len(inner); start++ {
+		match := true
+		for i, ol := range oursLines {
+			if strings.TrimSpace(inner[start+i]) != strings.TrimSpace(ol) {
+				match = false
+				break
+			}
+		}
+		if match {
+			out := make([]string, 0, len(inner)-len(oursLines))
+			out = append(out, inner[:start]...)
+			out = append(out, inner[start+len(oursLines):]...)
+			return out
+		}
+	}
+	return inner
+}
+
+// trimTopLevelBraces removes a dangling "{" before and "}" after the inner
+// body of an enclosing block replacement.
+func trimTopLevelBraces(inner []string) []string {
+	start, end := 0, len(inner)-1
+	for start <= end && strings.TrimSpace(inner[start]) == "" {
+		start++
+	}
+	for end >= start && strings.TrimSpace(inner[end]) == "" {
+		end--
+	}
+	if start > end {
+		return inner
+	}
+	if strings.TrimSpace(inner[start]) == "{" {
+		start++
+	}
+	for end >= start {
+		t := strings.TrimSpace(inner[end])
+		if t == "" {
+			end--
+			continue
+		}
+		if t == "}" {
+			end--
+			break
+		}
+		break
+	}
+	if start > end+1 {
+		return inner
+	}
+	return inner[start : end+1]
+}
+
+// findLineBefore returns the 0-based index of the last line before maxIdx
+// (exclusive) whose trimmed content equals target, or -1.
+func findLineBefore(lines []string, target string, maxIdx int) int {
+	for i := maxIdx - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// findLineAfter returns the 0-based index of the first line at or after
+// minIdx whose trimmed content equals target, or -1.
+func findLineAfter(lines []string, target string, minIdx, maxIdx int) int {
+	for i := minIdx; i < maxIdx && i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstNonEmptyLine returns the index of the first non-blank line, or -1.
+func firstNonEmptyLine(lines []string) int {
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			return i
+		}
+	}
+	return -1
+}
+
+// lastNonEmptyLine returns the index of the last non-blank line, or -1.
+func lastNonEmptyLine(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return i
+		}
+	}
+	return -1
+}
+
+// indexOfLine returns the 0-based index of the first line equal to target
+// within the first maxIdx lines, or -1.
+func indexOfLine(lines []string, target string, maxIdx int) int {
+	for i := 0; i < maxIdx && i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == target {
+			return i
+		}
+	}
+	return -1
 }

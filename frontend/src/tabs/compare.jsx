@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { GitCompare } from 'lucide-react'
+import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './compare.css'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const STATUS_LABELS = {
   ours_only: 'Ours only',
@@ -60,7 +60,7 @@ function Compare() {
     abortRef.current = controller
 
     try {
-      const response = await fetch(`${API_BASE}/api/compare`, {
+      const payload = await fetchJson(`${API_BASE}/api/compare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -71,15 +71,9 @@ function Compare() {
           theirsRef: theirs.trim(),
         }),
       })
-      const payload = await response.json().catch(() => null)
-      if (!response.ok || !payload?.success) {
-        const failure = new Error(payload?.error?.message || `Comparison failed (${response.status})`)
-        failure.code = payload?.error?.code || ''
-        throw failure
-      }
       setResult(payload.data)
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (isAbort(err)) return
       setError({ message: err.message, code: err.code || '' })
     } finally {
       if (!controller.signal.aborted) setLoading(false)
@@ -111,7 +105,8 @@ function Compare() {
           <span>Theirs</span>
           <input value={theirs} onChange={(e) => setTheirs(e.target.value)} placeholder="commit hash or branch" />
         </label>
-        <button type="submit" className="compare-submit" disabled={loading}>
+        <button type="submit" className="compare-submit" disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <GitCompare size={16} />
           {loading ? 'Comparing…' : 'Compare'}
         </button>
       </form>

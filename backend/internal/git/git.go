@@ -388,15 +388,57 @@ func CurrentBranch(repoDir string) string {
 }
 
 // IncomingBranch returns the branch being merged in, or "unknown".
+//
+// `git rev-parse --abbrev-ref MERGE_HEAD` literally prints "MERGE_HEAD", so
+// the name is parsed from .git/MERGE_MSG instead (its first line is
+// "Merge branch 'feature/login'"); explicit branch names in merge commits.
 func IncomingBranch(repoDir string) string {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "MERGE_HEAD")
-	cmd.Dir = repoDir
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return "unknown"
+	if name := incomingBranchFromMergeMsg(filepath.Join(repoDir, ".git", "MERGE_MSG")); name != "" {
+		return name
 	}
-	return strings.TrimSpace(out.String())
+	// Worktrees keep MERGE_MSG in the linked git dir; the rev-parse fallback
+	// resolves it there.
+	if out, err := exec.Command("git", "rev-parse", "--git-dir").Output(); err == nil {
+		gitDir := strings.TrimSpace(string(out))
+		if gitDir != "" && !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(repoDir, gitDir)
+		}
+		if name := incomingBranchFromMergeMsg(filepath.Join(gitDir, "MERGE_MSG")); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+// incomingBranchFromMergeMsg extracts the merged branch name from a
+// MERGE_MSG file's first line. Supported forms:
+//
+//	Merge branch 'x'          -> x
+//	Merge remote-tracking branch 'origin/x' -> origin/x
+//	Merge tag 'x'             -> x
+//	Merge commit 'abc1234'    -> "" (no branch name to report)
+func incomingBranchFromMergeMsg(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	firstLine := data
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		firstLine = data[:i]
+	}
+	msg := strings.TrimSpace(string(firstLine))
+	patterns := []string{
+		"Merge remote-tracking branch '",
+		"Merge branch '",
+		"Merge tag '",
+		"Merge pulled-by '",
+	}
+	for _, p := range patterns {
+		if strings.HasPrefix(msg, p) && strings.HasSuffix(msg, "'") {
+			return strings.TrimSuffix(strings.TrimPrefix(msg, p), "'")
+		}
+	}
+	return ""
 }
 
 // ─── Inline conflict parsing ─────────────────────────────────────────────────
@@ -653,8 +695,41 @@ func showStage(ctx context.Context, repoDir string, stage int, filename string) 
 	return out.String(), nil
 }
 
+// regionContainsContent reports whether any non-blank line of content appears
+// inside the region's side text. The comparison is line-based and trimmed so
+// indentation differences between the AST slice and inline region never
+// produce a false negative.
+func regionContainsContent(regionText, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	wanted := make(map[string]struct{})
+	for _, l := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(l)
+		if t != "" {
+			wanted[t] = struct{}{}
+		}
+	}
+	for _, l := range strings.Split(regionText, "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if _, ok := wanted[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchConflictRegion finds the best matching ConflictRegion from regions for a
 // conflict collision based on line location and content overlap.
+//
+// Content matching is direction-correct: ourContent/theirContent are usually
+// the WHOLE enclosing AST block (tens of lines) while the conflict region
+// holds only the few lines between the markers, so the check asks whether the
+// region's content lines appear inside the provided content — never whether
+// the small region contains the whole content.
 func MatchConflictRegion(regions []ConflictRegion, line int, ourContent, theirContent, baseContent string) (ConflictRegion, bool) {
 	if len(regions) == 0 {
 		return ConflictRegion{}, false
@@ -668,19 +743,22 @@ func MatchConflictRegion(regions []ConflictRegion, line int, ourContent, theirCo
 			return r, true
 		}
 	}
-	// 2. Content overlap match.
+	// 2. Content overlap match: any region line found within the provided
+	// content counts as overlap (region ⊆ content direction).
 	for _, r := range regions {
-		if (ourContent != "" && strings.Contains(r.Ours, ourContent)) ||
-			(theirContent != "" && strings.Contains(r.Theirs, theirContent)) ||
-			(baseContent != "" && strings.Contains(r.Base, baseContent)) {
+		if regionContainsContent(r.Ours, ourContent) ||
+			regionContainsContent(r.Theirs, theirContent) ||
+			regionContainsContent(r.Base, baseContent) {
 			return r, true
 		}
 	}
-	// 3. Closest by line distance.
+	// 3. Closest by line distance to the region midpoint (more stable than
+	// distance to the start marker alone).
 	closest := regions[0]
 	minDist := 1 << 30
 	for _, r := range regions {
-		dist := line - r.StartLine
+		mid := (r.StartLine + r.EndLine) / 2
+		dist := line - mid
 		if dist < 0 {
 			dist = -dist
 		}

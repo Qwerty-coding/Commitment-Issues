@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import './commitgraph.css'
-
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
+import { Network, ArrowRight, Layers } from 'lucide-react'
+import './commitgraph.css'
 
 function Commitgraph() {
   const [graph, setGraph] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [filterQuery, setFilterQuery] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -28,11 +29,19 @@ function Commitgraph() {
   }, [])
 
   if (loading) {
-    return <h2>Loading commit graph...</h2>
+    return (
+      <div className="commitgraph-page">
+        <h2>Loading AST & Dependency Graph...</h2>
+      </div>
+    )
   }
 
   if (error) {
-    return <h2>Error loading graph: {error}</h2>
+    return (
+      <div className="commitgraph-page">
+        <h2>Error loading graph: {error}</h2>
+      </div>
+    )
   }
 
   const renderEdgeList = () => {
@@ -40,16 +49,27 @@ function Commitgraph() {
       return null
     }
 
+    const filteredEdges = filterQuery
+      ? graph.edges.filter(
+          (edge) =>
+            edge.data.source.toLowerCase().includes(filterQuery.toLowerCase()) ||
+            edge.data.target.toLowerCase().includes(filterQuery.toLowerCase())
+        )
+      : graph.edges
+
     return (
       <div className="edge-list-card">
-        <h2>Edge relationships</h2>
-        <ul>
-          {graph.edges.map((edge) => (
-            <li key={edge.data.id}>
-              <span>{edge.data.source}</span>
-              <strong>→</strong>
-              <span>{edge.data.target}</span>
-              <span className="edge-type">{edge.data.type}</span>
+        <div className="edge-list-header">
+          <Layers size={18} />
+          <h2>Semantic Call Edges ({filteredEdges.length})</h2>
+        </div>
+        <ul className="edge-items">
+          {filteredEdges.map((edge) => (
+            <li key={edge.data.id} className="edge-item">
+              <span className="edge-source">{edge.data.source}</span>
+              <ArrowRight size={14} className="edge-arrow" />
+              <span className="edge-target">{edge.data.target}</span>
+              <span className="edge-type-badge">{edge.data.type || 'CALLS'}</span>
             </li>
           ))}
         </ul>
@@ -63,10 +83,9 @@ function Commitgraph() {
     }
 
     const rootNodes = graph.nodes.filter((node) => node.data.status === 'file')
-    // Deduplicate targets per source so repeated CALLS edges cannot fan out.
     const childMap = {}
-    
-    // 1. Add AST structural hierarchy (parent -> child)
+
+    // 1. AST structural hierarchy (parent -> child)
     graph.nodes.forEach((node) => {
       const parentId = node.data.parent
       if (parentId) {
@@ -77,7 +96,7 @@ function Commitgraph() {
       }
     })
 
-    // 2. Add semantic CALLS edges
+    // 2. Semantic CALLS edges
     if (graph.edges) {
       graph.edges.forEach((edge) => {
         const source = edge.data.source
@@ -94,10 +113,6 @@ function Commitgraph() {
       return acc
     }, {})
 
-    // Every node is rendered once per traversal; repeats degrade to a cycle
-    // marker instead of recursing forever ("Maximum call stack size exceeded").
-    // Each root starts with a fresh rendered set so sibling roots' children are
-    // not falsely flagged as cycles.
     const renderFrom = (rendered, nodeId) => {
       if (rendered.has(nodeId)) {
         const seen = nodeById[nodeId]
@@ -105,7 +120,7 @@ function Commitgraph() {
           <li className="tree-node tree-node-cycle" key={`${nodeId}-cycle`}>
             <div className="tree-label">
               <div className="node-title">↻ {seen?.data.label || nodeId}</div>
-              <div className="node-meta">cycle — already shown above</div>
+              <div className="node-meta">Cycle reference — already explored</div>
             </div>
           </li>
         )
@@ -118,14 +133,23 @@ function Commitgraph() {
       return (
         <li className="tree-node" key={nodeId}>
           <div className="tree-label">
-            <div className="node-title">{node.data.label || node.data.id}</div>
-            <div className="node-meta">{node.data.kind} · {node.data.status}</div>
+            <div className="node-header-row">
+              <span className="node-kind-tag">{node.data.kind || 'Symbol'}</span>
+              <span className="node-title">{node.data.label || node.data.id}</span>
+              <span className="node-status-badge">{node.data.status}</span>
+            </div>
           </div>
 
           <div className="tree-branch">
-            {node.data.base_code ? <div className="tree-leaf"><strong>Base</strong><pre>{node.data.base_code}</pre></div> : null}
-            {node.data.our_code ? <div className="tree-leaf"><strong>Ours</strong><pre>{node.data.our_code}</pre></div> : null}
-            {node.data.their_code ? <div className="tree-leaf"><strong>Theirs</strong><pre>{node.data.their_code}</pre></div> : null}
+            {node.data.base_code && (
+              <div className="tree-leaf"><strong>Base</strong><pre>{node.data.base_code}</pre></div>
+            )}
+            {node.data.our_code && (
+              <div className="tree-leaf"><strong>Ours</strong><pre>{node.data.our_code}</pre></div>
+            )}
+            {node.data.their_code && (
+              <div className="tree-leaf"><strong>Theirs</strong><pre>{node.data.their_code}</pre></div>
+            )}
           </div>
 
           {childMap[nodeId]?.length ? (
@@ -140,33 +164,55 @@ function Commitgraph() {
     const hasRoot = rootNodes.length > 0
     return (
       <div className="graph-card">
+        <div className="graph-card-header">
+          <Network size={18} />
+          <h2>AST Structural Hierarchy & Scope Nodes</h2>
+        </div>
         {hasRoot ? (
           <ul className="tree-view">
             {rootNodes.map((node) => renderFrom(new Set(), node.data.id))}
           </ul>
         ) : (
           <div className="graph-card-empty">
-            <p>No file nodes found. Showing all nodes instead.</p>
+            <p>No explicit file root nodes found. Showing all extracted AST nodes:</p>
             <ul className="tree-view">
               {graph.nodes.map((node) => renderFrom(new Set(), node.data.id))}
             </ul>
           </div>
         )}
-        {renderEdgeList()}
       </div>
     )
   }
 
   return (
     <div className="commitgraph-page">
-      <h1>Commit Graph</h1>
-      <div className="graph-summary">
-        <span>Nodes: {graph?.nodes?.length ?? 0}</span>
-        <span>Edges: {graph?.edges?.length ?? 0}</span>
+      <div className="commitgraph-header">
+        <h1>AST & Dependency Graph</h1>
+        <p>Extracted symbol hierarchy, enclosing scopes, and semantic call dependencies across conflicted files.</p>
+        <div style={{ marginTop: 12 }}>
+          <input
+            type="text"
+            placeholder="Filter call edges by symbol..."
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 10,
+              border: '1px solid #cbd5e1',
+              fontSize: 13,
+              width: 280,
+              maxWidth: '100%',
+            }}
+          />
+        </div>
       </div>
-      {renderGraphTree()}
+
+      <div className="graph-layout">
+        {renderGraphTree()}
+        {renderEdgeList()}
+      </div>
     </div>
   )
 }
 
-export default Commitgraph;
+export default Commitgraph

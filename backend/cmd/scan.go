@@ -12,7 +12,8 @@ var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Scan directory for Git merge conflicts",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		targetPath := "conflicts"
+		// Default uniformly to the current directory.
+		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

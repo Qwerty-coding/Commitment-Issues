@@ -24,6 +24,7 @@ import (
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
+	verification "CommitIssues/internal/verification"
 )
 
 // FileOutcome is the result of processing a single conflicted file. Errors are
@@ -523,8 +524,11 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 			} else {
 				item.Resolution = *res
 				item.Status = runstate.StatusComplete
-				if res.Confidence < cfg.ConfidenceThreshold {
-					item.Status = runstate.StatusBelowThreshold
+				// Local deterministic verification replaces the (deprecated)
+				// AI self-reported confidence gating per docs/design_decisions.md.
+				verificationRes := verification.Evaluate(targetFile, res.SuggestedCode, region)
+				if verificationRes.Status == verification.StatusNeedsReview {
+					item.Status = runstate.StatusManualReview
 				}
 				contextHash := ""
 				if analysis.RegionContextHashes != nil {
@@ -552,6 +556,9 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 					ValidationStatus: resolutions.ValidationNotRun,
 					CreatedAt:        time.Now().UTC(),
 				}
+				if item.Status == runstate.StatusManualReview {
+					resolutionRecord.Status = resolutions.StatusManualReview
+				}
 				savedRes := run.SaveResolution(resolutionRecord)
 				item.ResolutionID = savedRes.ID
 			}
@@ -567,8 +574,19 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 			continue
 		}
 
-		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (confidence=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), duration, res.Confidence)
-		fmt.Fprintf(buf, "     ✓ Resolved (Confidence: %d%%)\n", res.Confidence)
+		// Local deterministic verification replaces the (deprecated) AI
+		// self-reported confidence per docs/design_decisions.md. The conflict
+		// region is matched from the stored analysis when one exists; an empty
+		// region short-circuits the content-size sanity checks.
+		verificationRegion := git.ConflictRegion{}
+		if run != nil {
+			if analysis, ok := run.GetAnalysis(repoRoot, targetFile); ok {
+				verificationRegion, _ = git.MatchConflictRegion(analysis.ConflictRegions, collision.Line, collision.OurContent, collision.TheirContent, collision.BaseContent)
+			}
+		}
+		verificationRes := verification.Evaluate(targetFile, res.SuggestedCode, verificationRegion)
+		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (local verification score=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), duration, verificationRes.Score)
+		fmt.Fprintf(buf, "     ✓ Resolved (Local Verification Score: %d%%)\n", verificationRes.Score)
 		fmt.Fprintf(buf, "       Explanation: %s\n", res.Explanation)
 		fmt.Fprintf(buf, "       Suggested Code:\n")
 		for _, line := range strings.Split(res.SuggestedCode, "\n") {

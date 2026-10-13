@@ -147,3 +147,18 @@
   font-weight: 600;
   margin-bottom: 12px;
 }
+
+.aicontext-empty {
+  padding: 48px 24px;
+  background: white;
+  border: 1px dashed #dde2ea;
+  border-radius: 16px;
+  color: #667085;
+  text-align: center;
+}
+
+.aicontext-error {
+  border-color: #f3c2c2;
+  background: #fffafa;
+  color: #b42318;
+}

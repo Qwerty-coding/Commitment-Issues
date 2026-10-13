@@ -439,24 +439,26 @@ func TestGenerate_RunAndRepositoryIsolation(t *testing.T) {
 	}
 }
 
-func TestGenerate_BelowThresholdStatus(t *testing.T) {
+func TestGenerate_LowSelfReportedConfidenceStillCompletes(t *testing.T) {
+	// Per docs/design_decisions.md (2026-10-05), the AI's self-reported
+	// confidence no longer gates status. A low model self-assessment is
+	// recorded but the suggestion is still "complete" when the deterministic
+	// local verification passes.
 	f := newFakeOllama(t, "qwen2:1.5b")
 	f.respond = func(map[string]any) (int, string) {
 		return http.StatusOK, `{"explanation":"low","suggested_code":"c","confidence_score":10}`
 	}
 	run := runstate.NewRun()
 	seedRun(t, run, "/repo", map[string][]string{"a.js": {"one"}})
-	cfg := f.config("qwen2:1.5b")
-	cfg.ConfidenceThreshold = 70
-	gen := &Generator{Cfg: cfg}
+	gen := &Generator{Cfg: f.config("qwen2:1.5b")}
 	result, err := gen.GenerateForFile(context.Background(), run, "/repo", "a.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Suggestions[0].Status != runstate.StatusBelowThreshold {
-		t.Errorf("status = %q, want below_threshold", result.Suggestions[0].Status)
+	if result.Suggestions[0].Status != runstate.StatusComplete {
+		t.Errorf("status = %q, want complete (AI self-confidence must not gate)", result.Suggestions[0].Status)
 	}
-	if result.Meta.BelowThreshold != 1 {
+	if result.Meta.BelowThreshold != 0 {
 		t.Errorf("meta = %+v", result.Meta)
 	}
 }

@@ -16,7 +16,12 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useState } from 'react'
 
 function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= 768
+    }
+    return true
+  })
 
   const toggleSidebar = () => {
     setSidebarOpen((prev) => !prev)
@@ -30,7 +35,7 @@ function App() {
         <div className="app-layout">
           <Sidebar open={sidebarOpen} />
 
-          <div className="page-area">
+          <main className="page-area" role="main">
             <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
@@ -44,7 +49,7 @@ function App() {
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </ErrorBoundary>
-          </div>
+          </main>
 
         </div>
       </ErrorBoundary>

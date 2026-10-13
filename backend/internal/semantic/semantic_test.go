@@ -58,6 +58,61 @@ func TestSideStatus_Deleted(t *testing.T) {
 	}
 }
 
+// ─── Signature-change collisions ─────────────────────────────────────────────
+
+func TestGenerateSmartDiff_SignatureChangedOnBothSides(t *testing.T) {
+	// Base: func Process(x int). Ours changes the signature one way; theirs
+	// another. This must produce ONE structural collision — not a false
+	// "base deleted + two independent adds" pair.
+	baseFn := parser.CodeElement{Kind: "Function", Name: "Process", Line: 1, Content: "func Process(x int) int { return x }", Signature: "(x int)"}
+	ourFn := parser.CodeElement{Kind: "Function", Name: "Process", Line: 1, Content: "func Process(x int, y int) int { return x + y }", Signature: "(x int, y int)"}
+	theirFn := parser.CodeElement{Kind: "Function", Name: "Process", Line: 1, Content: "func Process(x int, timeout time.Duration) int { return x }", Signature: "(x int, timeout time.Duration)"}
+
+	base := parser.ASTContext{Functions: []parser.CodeElement{baseFn}}
+	ours := parser.ASTContext{Functions: []parser.CodeElement{ourFn}}
+	theirs := parser.ASTContext{Functions: []parser.CodeElement{theirFn}}
+
+	result := GenerateSmartDiff(context.Background(), base, ours, theirs)
+
+	if len(result.Collisions) != 1 {
+		t.Fatalf("expected 1 collision for divergent signature edits, got %d (our=%d their=%d)", len(result.Collisions), len(result.OurChanges), len(result.TheirChanges))
+	}
+	c := result.Collisions[0]
+	if c.Name != "Process" || c.Kind != "Function" {
+		t.Errorf("unexpected collision identity: %+v", c)
+	}
+	if c.OurContent != ourFn.Content || c.TheirContent != theirFn.Content {
+		t.Errorf("collision should carry both divergent bodies: %+v", c)
+	}
+	if len(result.OurChanges) != 0 || len(result.TheirChanges) != 0 {
+		t.Errorf("signatures changed on both sides must not ALSO be reported as independent add/delete pairs: ours=%d theirs=%d", len(result.OurChanges), len(result.TheirChanges))
+	}
+}
+
+func TestGenerateSmartDiff_SignatureChangedOnOneSideOnly(t *testing.T) {
+	// Only ours changed the signature; theirs is identical to base.
+	// Declaration-level reconciliation requires BOTH sides to diverge, so a
+	// one-sided signature edit still renders through the identity pass as a
+	// delete (base identity) + add (new identity) pair on ours.
+	baseFn := parser.CodeElement{Kind: "Function", Name: "Calc", Line: 1, Content: "func Calc() int", Signature: "()"}
+	ourFn := parser.CodeElement{Kind: "Function", Name: "Calc", Line: 1, Content: "func Calc(mult int) int", Signature: "(mult int)"}
+
+	result := GenerateSmartDiff(context.Background(),
+		parser.ASTContext{Functions: []parser.CodeElement{baseFn}},
+		parser.ASTContext{Functions: []parser.CodeElement{ourFn}},
+		parser.ASTContext{Functions: []parser.CodeElement{baseFn}})
+
+	if len(result.Collisions) != 0 {
+		t.Fatalf("one-sided signature edit must not collide; got %d", len(result.Collisions))
+	}
+	if len(result.OurChanges) != 2 {
+		t.Fatalf("expected delete+add pair for one-sided signature edit, got %+v", result.OurChanges)
+	}
+	if result.OurChanges[0].Type != "DELETED" || result.OurChanges[1].Type != "ADDED" {
+		t.Errorf("expected DELETED then ADDED, got %+v", result.OurChanges)
+	}
+}
+
 func TestSideStatus_Updated(t *testing.T) {
 	base := fn("login", 1, "function login(){ return 1 }")
 	side := fn("login", 1, "function login(){ return 2 }")
@@ -338,6 +393,20 @@ func TestBuildSemanticGraph_CallsEdge(t *testing.T) {
 	}
 	if g.Edges[0].Type != "CALLS" {
 		t.Errorf("expected edge type CALLS, got %q", g.Edges[0].Type)
+	}
+}
+
+func TestBuildSemanticGraph_MethodsGetCallsEdges(t *testing.T) {
+	// Object-oriented code: methods and constructors must participate in the
+	// call graph, not just plain functions.
+	method := parser.CodeElement{Kind: "Method", Name: "charge", Scope: "Engine", Line: 1, Content: "func (e Engine) charge()", Calls: []string{"validate"}}
+	ctor := parser.CodeElement{Kind: "Constructor", Name: "NewEngine", Scope: "Engine", Line: 5, Content: "func NewEngine()", Calls: []string{"charge"}}
+	callee := parser.CodeElement{Kind: "Function", Name: "validate", Line: 10, Content: "func validate()"}
+
+	g := BuildSemanticGraph(parser.ASTContext{Functions: []parser.CodeElement{method, ctor, callee}})
+
+	if len(g.Edges) != 2 {
+		t.Fatalf("expected 2 CALLS edges (method->fn, ctor->method), got %d: %+v", len(g.Edges), g.Edges)
 	}
 }
 

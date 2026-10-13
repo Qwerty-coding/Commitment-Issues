@@ -1,101 +1,85 @@
 .sidebar {
     width: 260px;
     flex-shrink: 0;
-    min-height: calc(100vh - 56px);
-    background-color: #212529;
-    color: white;
-    padding: 20px 15px;
+    min-height: calc(100vh - var(--navbar-height, 56px));
+    background-color: #1e2228;
+    color: #e6edf3;
+    padding: 24px 16px;
     z-index: 1000;
+    border-right: 1px solid #2d333b;
+    transition: width 0.2s ease, padding 0.2s ease;
 }
 
-/* Kept mounted (not unmounted) so the navbar's aria-controls
-   reference to #app-sidebar remains valid while collapsed. */
+/* Hidden state */
 .sidebar-hidden {
     display: none;
 }
 
-.sidebar-title {
-    font-size: 20px;
-    font-weight: bold;
-    margin-bottom: 25px;
+.sidebar-header {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 24px;
+    padding: 0 8px 16px 8px;
+    border-bottom: 1px solid #2d333b;
 }
 
-.sidebar ul {
+.sidebar-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+}
+
+.sidebar-subtitle {
+    font-size: 12px;
+    color: #768390;
+    margin-top: 4px;
+}
+
+.sidebar-nav {
     list-style: none;
     padding: 0;
     margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
-.sidebar li {
-    padding: 12px 10px;
-    cursor: pointer;
-    border-radius: 6px;
-    margin:2px;
-}
-
-.sidebar li a{
-    text-decoration:none
+.sidebar-nav li {
+    padding: 0;
+    margin: 0;
 }
 
 .sidebar-link {
     display: flex;
     align-items: center;
+    gap: 12px;
     width: 100%;
-    padding: 2px 0;
-
-    color: white;
+    padding: 10px 14px;
+    border-radius: 8px;
+    color: #adbac7;
     text-decoration: none;
-    font-size: 15px;
-
-    border: none;
-    background: none;
-    cursor: pointer;
-    text-align: left;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s ease-in-out;
 }
 
 .sidebar-link:hover {
-    color: #e9e4f7;
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.05);
 }
 
 .sidebar-link.active {
-    font-weight: 700;
-    color: #c4b5fd;
+    color: #ffffff;
+    background-color: var(--brand, #6d3df5);
+    box-shadow: 0 2px 8px rgba(109, 61, 245, 0.3);
 }
 
-.sidebar li:hover {
-    background-color: #343a40;
+.sidebar-icon {
+    flex-shrink: 0;
+    opacity: 0.85;
 }
 
-.sidebar li i {
-    width: 25px;
-    margin-right: 10px;
-}
-
-.sidebar-item {
-    position: relative;
-}
-
-.tooltip {
-    position: absolute;
-    left: 30px;
-    top: 50%;
-    transform: translateY(-50%);
-
-    background: white;
-    color: #212529;
-
-    padding: 6px 10px;
-    border-radius: 5px;
-
-    white-space: nowrap;
-
-    opacity: 0;
-    visibility: hidden;
-
-    transition: 0.2s;
-}
-
-.sidebar-item:hover .tooltip {
+.sidebar-link.active .sidebar-icon {
     opacity: 1;
-    visibility: visible;
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"CommitIssues/internal/compare"
@@ -19,6 +20,29 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v in %s failed: %v\nOutput: %s", args, dir, err, string(out))
 	}
 	return string(out)
+}
+
+// defaultBranch returns the branch name of the test repo's HEAD ("main" on
+// modern Git defaults, "master" on older ones). Tests never hard-code the
+// name: hard-coding one of them freezes on the other configuration.
+func defaultBranch(t *testing.T, repo string) string {
+	t.Helper()
+	branch := strings.TrimSpace(runGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
+	if branch == "" || branch == "HEAD" {
+		branch = strings.TrimSpace(runGit(t, repo, "branch", "--show-current"))
+	}
+	if branch == "" {
+		t.Fatalf("cannot determine default branch of test repo in %s", repo)
+	}
+	return branch
+}
+
+// initialBranch captures the test repo's initial branch name at setup time
+// (i.e. before any checkout switches HEAD onto a fixture branch). Use this
+// when a test later needs to compare against the repo's starting branch.
+func initialBranch(t *testing.T, repo string) string {
+	t.Helper()
+	return defaultBranch(t, repo)
 }
 
 func setupTestGitRepo(t *testing.T) string {
@@ -52,7 +76,7 @@ func TestCompare_SameFileModifiedDifferently_StructuralCollision(t *testing.T) {
 	runGit(t, repo, "commit", "-am", "ours modification")
 
 	// Branch theirs
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "feature-theirs")
 	_ = os.WriteFile(mainPath, []byte("package main\n\nfunc ProcessData(x int) int {\n    return x * 2\n}\n"), 0644)
 	runGit(t, repo, "commit", "-am", "theirs modification")
@@ -89,7 +113,7 @@ func TestCompare_SameChangeOnBothSides_Identical(t *testing.T) {
 	runGit(t, repo, "commit", "-am", "ours identical change")
 
 	// Theirs
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "theirs-calc")
 	_ = os.WriteFile(mainPath, []byte("def add(a, b):\n    # docstring\n    return a + b\n"), 0644)
 	runGit(t, repo, "commit", "-am", "theirs identical change")
@@ -128,7 +152,7 @@ func TestCompare_OursOnlyAndTheirsOnly(t *testing.T) {
 	runGit(t, repo, "commit", "-am", "mod A")
 
 	// Theirs modifies file B
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "branch-b")
 	_ = os.WriteFile(fileB, []byte("modified B\n"), 0644)
 	runGit(t, repo, "commit", "-am", "mod B")
@@ -164,7 +188,7 @@ func TestCompare_AddAddConflict(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "add ours")
 
 	// Theirs adds new_file.js with different content
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "branch-add-theirs")
 	_ = os.WriteFile(newFile, []byte("console.log('theirs');\n"), 0644)
 	runGit(t, repo, "add", "new_file.js")
@@ -200,7 +224,7 @@ func TestCompare_DeleteModifyConflict(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "delete config")
 
 	// Theirs modifies config.json
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "branch-mod")
 	_ = os.WriteFile(target, []byte("{\"port\": 9090}\n"), 0644)
 	runGit(t, repo, "commit", "-am", "modify config")
@@ -234,7 +258,7 @@ func TestCompare_BinaryFiles(t *testing.T) {
 	runGit(t, repo, "commit", "-am", "ours binary")
 
 	// Theirs
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "bin-theirs")
 	_ = os.WriteFile(binPath, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00theirs"), 0644)
 	runGit(t, repo, "commit", "-am", "theirs binary")
@@ -260,7 +284,7 @@ func TestCompare_InvalidCommit(t *testing.T) {
 	_, err := compare.CompareCommits(context.Background(), compare.Options{
 		Repo1:     repo,
 		OursRef:   "non-existent-commit-sha",
-		TheirsRef: "master",
+		TheirsRef: defaultBranch(t, repo),
 	})
 	if err == nil {
 		t.Fatalf("expected error for invalid commit ref")
@@ -285,8 +309,8 @@ func TestCompare_TwoRepositories_Unrelated(t *testing.T) {
 	result, err := compare.CompareCommits(context.Background(), compare.Options{
 		Repo1:     repo1,
 		Repo2:     repo2,
-		OursRef:   "master",
-		TheirsRef: "master",
+		OursRef:   defaultBranch(t, repo1),
+		TheirsRef: defaultBranch(t, repo2),
 	})
 	if err != nil {
 		t.Fatalf("CompareCommits failed for unrelated repos: %v", err)
@@ -314,7 +338,7 @@ func TestCompare_RenameOnOneSide_SingleLogicalFile(t *testing.T) {
 	runGit(t, repo, "commit", "-am", "rename and edit")
 
 	// Theirs edits old.go in place
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "edit-theirs")
 	_ = os.WriteFile(oldPath, []byte("package main\n\nfunc Work() int {\n    return 3\n}\n"), 0644)
 	runGit(t, repo, "commit", "-am", "edit in place")
@@ -355,7 +379,7 @@ func TestCompare_DivergentRename_RenameConflict(t *testing.T) {
 	runGit(t, repo, "mv", "util.py", "util_a.py")
 	runGit(t, repo, "commit", "-m", "rename to util_a")
 
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "rename-b")
 	runGit(t, repo, "mv", "util.py", "util_b.py")
 	runGit(t, repo, "commit", "-m", "rename to util_b")
@@ -390,7 +414,7 @@ func TestCompare_RenameVersusDelete_RenameConflict(t *testing.T) {
 	runGit(t, repo, "mv", "a.txt", "b.txt")
 	runGit(t, repo, "commit", "-m", "rename a to b")
 
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "delete-side")
 	runGit(t, repo, "rm", "a.txt")
 	runGit(t, repo, "commit", "-m", "delete a")
@@ -413,6 +437,7 @@ func TestCompare_RenameVersusDelete_RenameConflict(t *testing.T) {
 // an error, via the ErrNoMergeBase classification.
 func TestCompare_OrphanBranches_NoMergeBase(t *testing.T) {
 	repo := setupTestGitRepo(t)
+	initial := initialBranch(t, repo)
 
 	_ = os.WriteFile(filepath.Join(repo, "one.txt"), []byte("one\n"), 0644)
 	runGit(t, repo, "add", "one.txt")
@@ -426,7 +451,7 @@ func TestCompare_OrphanBranches_NoMergeBase(t *testing.T) {
 
 	result, err := compare.CompareCommits(context.Background(), compare.Options{
 		Repo1:     repo,
-		OursRef:   "master",
+		OursRef:   initial,
 		TheirsRef: "orphan-branch",
 	})
 	if err != nil {
@@ -455,7 +480,7 @@ func TestCompare_RenameConflict(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "rename to ours")
 
 	// Branch theirs renames doc.txt -> doc_theirs.txt
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "branch-rename-theirs")
 	runGit(t, repo, "mv", "doc.txt", "doc_theirs.txt")
 	runGit(t, repo, "commit", "-m", "rename to theirs")
@@ -480,6 +505,9 @@ func TestCompare_RenameConflict(t *testing.T) {
 // 10. Missing merge base within same repository (orphan branches)
 func TestCompare_SameRepo_MissingMergeBase(t *testing.T) {
 	repo := setupTestGitRepo(t)
+	// Capture the initial branch BEFORE any fixture checkout so the
+	// OursRef below refers to the pre-orphan history.
+	initial := initialBranch(t, repo)
 
 	f1 := filepath.Join(repo, "file1.txt")
 	_ = os.WriteFile(f1, []byte("root file\n"), 0644)
@@ -496,7 +524,7 @@ func TestCompare_SameRepo_MissingMergeBase(t *testing.T) {
 
 	result, err := compare.CompareCommits(context.Background(), compare.Options{
 		Repo1:     repo,
-		OursRef:   "master",
+		OursRef:   initial,
 		TheirsRef: "orphan-branch",
 	})
 	if err != nil {
@@ -576,7 +604,7 @@ func TestCompare_ZeroWorkingTreeMutations(t *testing.T) {
 	_ = os.WriteFile(f, []byte("package main\n\nfunc Calc() int { return 1 }\n"), 0644)
 	runGit(t, repo, "commit", "-am", "b1")
 
-	runGit(t, repo, "checkout", "master")
+	runGit(t, repo, "checkout", defaultBranch(t, repo))
 	runGit(t, repo, "checkout", "-b", "b2")
 	_ = os.WriteFile(f, []byte("package main\n\nfunc Calc() int { return 2 }\n"), 0644)
 	runGit(t, repo, "commit", "-am", "b2")

@@ -56,7 +56,8 @@ func TestParseJSONResponse_Invalid(t *testing.T) {
 		{"empty explanation", `{"explanation":"   ","suggested_code":"c","confidence_score":10}`, CodeSchemaInvalid},
 		{"missing suggested_code", `{"explanation":"e","confidence_score":10}`, CodeSchemaInvalid},
 		{"empty suggested_code", `{"explanation":"e","suggested_code":"  ","confidence_score":10}`, CodeSchemaInvalid},
-		{"missing confidence", `{"explanation":"e","suggested_code":"c"}`, CodeSchemaInvalid},
+		// confidence_score is no longer required (design decision 2026-10-05):
+		// a missing number is legal and never gates anything.
 		{"confidence too high", `{"explanation":"e","suggested_code":"c","confidence_score":101}`, CodeSchemaInvalid},
 		{"confidence negative", `{"explanation":"e","suggested_code":"c","confidence_score":-1}`, CodeSchemaInvalid},
 		{"confidence wrong type", `{"explanation":"e","suggested_code":"c","confidence_score":"high"}`, CodeMalformedJSON},
@@ -291,8 +292,8 @@ func TestProvider_RetryableStatusRetriedThroughHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected eventual success: %v", err)
 	}
-	if res.Confidence != 77 || attempts != 3 {
-		t.Errorf("confidence=%d attempts=%d, want 77 and 3", res.Confidence, attempts)
+	if res.SuggestedCode != "c" || attempts != 3 {
+		t.Errorf("suggested_code=%q attempts=%d, want \"c\" and 3", res.SuggestedCode, attempts)
 	}
 }
 

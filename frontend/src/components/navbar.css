@@ -1,9 +1,51 @@
-.subpart {
-    margin-left: 10px;
-    margin-right: 10px;
+.navbar {
+    height: var(--navbar-height, 56px);
+    background-color: #1a1d21;
+    color: #ffffff;
     display: flex;
-    gap: 16px;
     align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 1050;
+    border-bottom: 1px solid #2d333b;
+    padding: 0 16px;
+}
+
+.navbar .container-fluid {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.navbar-brand-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+button.navbar-toggle {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #e6edf3;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+button.navbar-toggle:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.brand-icon {
+    color: var(--brand, #6d3df5);
 }
 
 .subpart-div {
@@ -11,16 +53,32 @@
     align-items: center;
 }
 
-button.navbar-toggle {
-    background: none;
-    border: none;
-    color: white;
-    cursor: pointer;
-    padding: 8px 12px;
-    border-radius: 8px;
-    transition: background-color 0.2s;
+.subpart {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    gap: 14px;
+    align-items: center;
 }
 
-button.navbar-toggle:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+.navbar-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: #262c36;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    color: #adbac7;
+    border: 1px solid #373e47;
+}
+
+.navbar-pill span {
+    font-weight: 500;
+    color: #e6edf3;
+}
+
+.navbar-pill-icon {
+    color: #768390;
 }

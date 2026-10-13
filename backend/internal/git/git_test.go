@@ -437,6 +437,66 @@ func TestExtractConflictVersions_ContextCancelled(t *testing.T) {
 	}
 }
 
+func TestMatchConflictRegion_ContentTypeInRegionMatchesLargeContent(t *testing.T) {
+	// ourContent is the WHOLE enclosing function (large), while each region
+	// holds only a small inner slice. Step 2 must ask "is any region line
+	// contained in the content?" — the inverted direction used previously.
+	regions := []ConflictRegion{
+		{Index: 0, StartLine: 2, EndLine: 5, Ours: "unrelated ours\nhere", Theirs: "unrelated theirs"},
+		{Index: 1, StartLine: 20, EndLine: 24, Ours: "\treturn x * 2", Theirs: "\treturn x * 3"},
+	}
+	wholeFn := "func Process(x int) int {\n\tsetup();\n\treturn x * 2\n}"
+
+	got, ok := MatchConflictRegion(regions, 1, wholeFn, "", "")
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if got.Index != 1 {
+		t.Errorf("expected region 1 (the one carrying `return x * 2`), got region %d", got.Index)
+	}
+}
+
+func TestMatchConflictRegion_NoFalseContentMatch(t *testing.T) {
+	regions := []ConflictRegion{
+		{Index: 0, StartLine: 2, EndLine: 5, Ours: "alpha", Theirs: "beta"},
+		{Index: 1, StartLine: 40, EndLine: 44, Ours: "gamma", Theirs: "delta"},
+	}
+	// Content shares no lines with either region, and the line (10) is closest
+	// to region 0 — must not flip to region 1 via bogus content overlap.
+	got, ok := MatchConflictRegion(regions, 10, "completely other lines\nnone match", "", "")
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if got.Index != 0 {
+		t.Errorf("expected nearest region 0, got region %d", got.Index)
+	}
+}
+
+func TestIncomingBranch_ReadsMergeMsg(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".git", "MERGE_MSG"), "Merge branch 'feature/login'\n\n# Conflicts:\n")
+	if got := IncomingBranch(dir); got != "feature/login" {
+		t.Errorf("IncomingBranch = %q, want feature/login (never the literal MERGE_HEAD)", got)
+	}
+}
+
+func TestIncomingBranch_RemoteTrackingForm(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".git", "MERGE_MSG"), "Merge remote-tracking branch 'origin/main' into dev\n")
+	// Trailing descriptive text after the quoted name strips to origin/main.
+	got := IncomingBranch(dir)
+	if got != "origin/main" && got != "unknown" {
+		t.Errorf("IncomingBranch = %q, want origin/main or unknown, never MERGE_HEAD", got)
+	}
+}
+
+func TestIncomingBranch_AbsentIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	if got := IncomingBranch(dir); got != "unknown" {
+		t.Errorf("IncomingBranch without merge in progress = %q, want unknown", got)
+	}
+}
+
 func TestFindGitRepositoryRoots_Cancelled(t *testing.T) {
 	dir := initRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import {
+  FileCode,
+  Cpu,
+  BookOpen,
+  Layers,
+  Box,
+  Clock,
+  AlertCircle,
+} from 'lucide-react'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './aicontext.css'
 
@@ -41,11 +50,30 @@ function AIContext() {
   const readme = (selected?.repositoryReadme || '').trim()
 
   if (loading) {
-    return <h2>Loading AI context...</h2>
+    return (
+      <div className="aicontext-page">
+        <h1>AI Context</h1>
+        <p className="aicontext-subtitle">
+          The exact project context sent to the AI resolver for each conflicted file.
+        </p>
+        <div className="aicontext-empty">
+          <Clock size={20} style={{ display: 'inline-block', verticalAlign: 'middle', marginRight: 8, color: '#6366f1' }} />
+          <span>Loading AI context...</span>
+        </div>
+      </div>
+    )
   }
 
   if (error) {
-    return <h2>Error loading AI context: {error}</h2>
+    return (
+      <div className="aicontext-page">
+        <h1>AI Context</h1>
+        <div className="aicontext-empty aicontext-error">
+          <AlertCircle size={24} style={{ color: '#ef4444', marginBottom: 8 }} />
+          <p>Error loading AI context: {error}</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -56,7 +84,7 @@ function AIContext() {
       </p>
 
       {contexts.length === 0 ? (
-        <p>No prompt context available.</p>
+        <div className="aicontext-empty">No prompt context available.</div>
       ) : (
         <div className="aicontext-grid">
           <aside className="aicontext-list" role="tablist" aria-label="Conflicted files">
@@ -68,8 +96,15 @@ function AIContext() {
                 aria-selected={contextKey(ctx) === selectedKey}
                 onClick={() => setSelectedKey(contextKey(ctx))}
               >
-                <span>{contextKey(ctx)}</span>
-                <span>≈ {ctx.estimatedTokens ?? 0} tokens</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                  <FileCode size={16} style={{ color: '#6366f1', flexShrink: 0 }} />
+                  <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                    {contextKey(ctx)}
+                  </span>
+                </div>
+                <span style={{ fontSize: '12px', color: '#6b7280', flexShrink: 0 }}>
+                  ≈ {ctx.estimatedTokens ?? 0} tok
+                </span>
               </button>
             ))}
           </aside>
@@ -83,15 +118,23 @@ function AIContext() {
                     <p>{selected.repositorySummary}</p>
                   </div>
                   <div className="aicontext-stats">
-                    <span>≈ {selected.estimatedTokens ?? 0} tokens</span>
-                    <span>{selected.functions?.length ?? 0} functions</span>
-                    <span>{selected.imports?.length ?? 0} imports</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <Cpu size={14} /> ≈ {selected.estimatedTokens ?? 0} tokens
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <Layers size={14} /> {selected.functions?.length ?? 0} functions
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <Box size={14} /> {selected.imports?.length ?? 0} imports
+                    </span>
                   </div>
                 </div>
 
                 {readme ? (
                   <section className="aicontext-readme">
-                    <h3>Repository README context</h3>
+                    <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <BookOpen size={16} /> Repository README context
+                    </h3>
                     <p className="aicontext-readme-note">
                       Included as pre-context so the resolver understands the project.
                     </p>

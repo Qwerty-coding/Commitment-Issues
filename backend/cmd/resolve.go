@@ -52,7 +52,8 @@ var resolveCmd = &cobra.Command{
 			fmt.Printf("[resolve] starting resolve command at %s\n", start.Format(time.RFC3339))
 		}
 
-		targetPath := "conflicts"
+		// Default uniformly to the current directory (parity with scan/analyze).
+		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
 		}

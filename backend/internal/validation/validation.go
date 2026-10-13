@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -235,20 +236,39 @@ func (r *Runner) isAllowed(command string) bool {
 	return false
 }
 
+// windowsOnlyEnvKeys are the variables Windows child processes cannot run
+// without: without SystemRoot/COMSPEC the C runtime cannot locate kernel32
+// through the loader, and without TEMP/TMP tools that touch temp files
+// (go build cache, node-gyp, pip) fail with obscure loader or cache errors.
+// They carry no credentials, so preserving them leaks nothing.
+var windowsOnlyEnvKeys = []string{
+	"SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+	"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+	"SYSTEMDRIVE", "PROGRAMFILES", "PATHEXT",
+}
+
 // buildEnv returns the sanitized environment for the validation command. If
 // the config specifies an explicit Env, it is used verbatim. Otherwise a
-// minimal environment containing only PATH is constructed.
+// minimal, non-credential-bearing environment is constructed: PATH plus, on
+// Windows, the OS-critical variables standard toolchains require to even
+// start (Windows wipes of SystemRoot/TEMP break go, node, python and git).
 func (r *Runner) buildEnv() []string {
 	if r.cfg.Env != nil {
 		return r.cfg.Env
 	}
-	// Minimal safe environment: keep PATH so commands can be found, drop
-	// everything else to prevent credential leakage.
 	path := os.Getenv("PATH")
 	if path == "" {
 		path = "/usr/local/bin:/usr/bin:/bin"
 	}
-	return []string{"PATH=" + path}
+	env := []string{"PATH=" + path}
+	if runtime.GOOS == "windows" {
+		for _, key := range windowsOnlyEnvKeys {
+			if v := os.Getenv(key); v != "" {
+				env = append(env, key+"="+v)
+			}
+		}
+	}
+	return env
 }
 
 func (r *Runner) outputLimit() int {

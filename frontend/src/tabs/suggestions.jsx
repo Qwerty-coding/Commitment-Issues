@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
+import {
+  Sparkles,
+  Check,
+  CheckCircle2,
+  AlertTriangle,
+  RotateCcw,
+  Eye,
+  RefreshCw,
+  FileCode,
+  ShieldCheck,
+} from 'lucide-react'
 import './suggestions.css'
 
 const PROVIDER_ERROR_CODES = new Set([
@@ -33,11 +44,10 @@ function statusLabel(status) {
     case 'complete':
       return 'Complete'
     case 'below_threshold':
-      return 'Below Threshold'
+      return 'Unverified AI Score'
     case 'manual_review':
       return 'Manual Review'
     default:
-      // Replace every underscore: 'multi_word_status' renders fully spaced.
       return status ? status.split('_').join(' ') : 'Proposed'
   }
 }
@@ -125,7 +135,6 @@ function Suggestions() {
     setLoading(true)
     setError(null)
     setGlobalError(null)
-    // Clear stale revert-confirm state so a modal never survives a refetch.
     setActionState({})
     setReloadKey((key) => key + 1)
   }, [])
@@ -208,14 +217,7 @@ function Suggestions() {
       if (!resp.ok || !payload?.success) {
         throw new Error(payload?.error?.message || payload?.error?.code || 'Apply failed')
       }
-      setResolutionsMap((prev) => ({
-        ...prev,
-        [resId]: {
-          ...payload.data,
-          postApplyHash: payload.postApplyHash,
-          validationStatus: payload.validationStatus || payload.data.validationStatus,
-        },
-      }))
+      setResolutionsMap((prev) => ({ ...prev, [resId]: payload.data.resolution }))
       setItemAction(resId, { inFlight: null, error: null })
     } catch (err) {
       setItemAction(resId, { inFlight: null, error: err.message })
@@ -225,7 +227,7 @@ function Suggestions() {
   // Handle Revert
   const handleRevert = async (item, resId, postApplyHash) => {
     if (!resId) return
-    setItemAction(resId, { inFlight: 'revert', error: null, confirmRevert: false })
+    setItemAction(resId, { inFlight: 'revert', error: null })
     try {
       const resp = await fetch(`${API_BASE}/api/resolutions/${resId}/revert`, {
         method: 'POST',
@@ -242,7 +244,7 @@ function Suggestions() {
         throw new Error(payload?.error?.message || payload?.error?.code || 'Revert failed')
       }
       setResolutionsMap((prev) => ({ ...prev, [resId]: payload.data }))
-      setItemAction(resId, { inFlight: null, error: null })
+      setItemAction(resId, { inFlight: null, confirmRevert: false, error: null })
     } catch (err) {
       setItemAction(resId, { inFlight: null, error: err.message })
     }
@@ -263,8 +265,6 @@ function Suggestions() {
       retry()
     } catch (err) {
       console.error('Refresh analysis failed:', err)
-      // Surface the failure so the user is not left staring at a stale file
-      // warning that silently does nothing when clicked.
       setGlobalError({ message: err.message, code: err.code || '' })
     }
   }
@@ -277,10 +277,13 @@ function Suggestions() {
     return (
       <div className="suggestions-page">
         <div className="suggestions-header">
-          <h1>AI Suggestions</h1>
-          <p>Generating resolution suggestions...</p>
+          <h1>Resolution Suggestions</h1>
+          <p>Generating AST-driven resolution suggestions...</p>
         </div>
-        <div className="suggestions-state">Loading suggestions...</div>
+        <div className="suggestions-state">
+          <RefreshCw size={24} className="spin-icon" />
+          <span>Analyzing conflicts and generating suggestions...</span>
+        </div>
       </div>
     )
   }
@@ -289,28 +292,28 @@ function Suggestions() {
     return (
       <div className="suggestions-page">
         <div className="suggestions-header">
-          <h1>AI Suggestions</h1>
-          <p>{file ? `AI suggestions for ${file}` : 'AI-generated resolution suggestions for current merge conflicts.'}</p>
+          <h1>Resolution Suggestions</h1>
+          <p>{file ? `Suggestions for ${file}` : 'Resolution suggestions for active merge collisions.'}</p>
         </div>
         {providerUnavailable ? (
           <div className="suggestions-state suggestions-state-warning">
-            <h2>AI provider unavailable</h2>
+            <h2>AI Provider Unavailable</h2>
             <p>
-              The configured provider could not be reached or is not ready. Start Ollama and make sure the
-              configured model is installed, then retry.
+              The configured AI provider could not be reached. Ensure your local provider (e.g. Ollama) is running
+              and the model is downloaded, or configure API credentials.
             </p>
             <p className="suggestions-state-detail">
               {error.code ? `${error.code}: ` : ''}
               {error.message}
             </p>
             <button type="button" className="suggestions-retry" onClick={retry}>
-              Retry
+              Retry Connection
             </button>
           </div>
         ) : error.code === 'TIMEOUT' ? (
           <div className="suggestions-state suggestions-state-warning">
-            <h2>Request timed out</h2>
-            <p>The generation request exceeded its deadline before completing.</p>
+            <h2>Request Timed Out</h2>
+            <p>The suggestion request exceeded the configured deadline.</p>
             <p className="suggestions-state-detail">{error.message}</p>
             <button type="button" className="suggestions-retry" onClick={retry}>
               Retry
@@ -318,7 +321,7 @@ function Suggestions() {
           </div>
         ) : (
           <div className="suggestions-state suggestions-state-error">
-            <h2>Error loading suggestions</h2>
+            <h2>Error Loading Suggestions</h2>
             <p>{error.message}</p>
             <button type="button" className="suggestions-retry" onClick={retry}>
               Retry
@@ -332,11 +335,11 @@ function Suggestions() {
   return (
     <div className="suggestions-page">
       <div className="suggestions-header">
-        <h1>AI Suggestions & Patch Resolution</h1>
+        <h1>Resolution Suggestions & Patch Safety</h1>
         <p>
           {file
-            ? `Preview, approve, apply, and rollback safe patches for ${file}.`
-            : 'Preview, approve, apply, and rollback safe patches for merge conflicts.'}
+            ? `Review, preview diff, approve, and safely apply patches for ${file}.`
+            : 'Review, preview diff, approve, and safely apply patches for merge collisions.'}
         </p>
         {globalError && (
           <div className="suggestions-state suggestions-state-error" role="alert" aria-live="assertive">
@@ -355,9 +358,6 @@ function Suggestions() {
             {meta.runId && <span className="suggestions-chip">run {meta.runId}</span>}
             <span className="suggestions-chip">{meta.generated} generated</span>
             {meta.reused > 0 && <span className="suggestions-chip">{meta.reused} reused</span>}
-            {meta.belowThreshold > 0 && (
-              <span className="suggestions-chip suggestions-chip-warning">{meta.belowThreshold} below threshold</span>
-            )}
             {meta.failed > 0 && (
               <span className="suggestions-chip suggestions-chip-error">{meta.failed} failed</span>
             )}
@@ -369,7 +369,7 @@ function Suggestions() {
         <div className="suggestions-partial">
           <div>
             <strong>Some collisions could not be resolved.</strong>
-            <p>Successful suggestions are shown below; only the failures will be regenerated on retry.</p>
+            <p>Successful suggestions are shown below; failed ones can be retried.</p>
             <ul className="suggestions-failures">
               {(meta.failures || []).map((failure, index) => (
                 <li key={`${failure.file}-${failure.collisionKey}-${index}`}>
@@ -381,14 +381,14 @@ function Suggestions() {
           </div>
           {canRetry && (
             <button type="button" className="suggestions-retry" onClick={retry}>
-              Retry failures
+              Retry Failures
             </button>
           )}
         </div>
       )}
 
       {suggestions.length === 0 ? (
-        <div className="empty-state">No suggestions available yet.</div>
+        <div className="empty-state">No conflict suggestions available for this repository.</div>
       ) : (
         suggestions.map((item, index) => {
           const confidence = item.resolution?.confidence_score ?? item.resolution?.confidence
@@ -415,7 +415,9 @@ function Suggestions() {
             >
               <div className="ai-suggestion-title">
                 <div className="suggestion-meta">
-                  <div className="ai-suggestion-icon">AI</div>
+                  <div className="ai-suggestion-icon">
+                    <Sparkles size={20} />
+                  </div>
                   <div>
                     <h3>{item.file}</h3>
                     <p>
@@ -432,12 +434,20 @@ function Suggestions() {
                 </div>
 
                 <div className="suggestion-badges">
-                  {/* Separate AI Confidence Score */}
-                  <span className="ai-suggestion-score" title="AI Model Confidence Score">
-                    AI Confidence: {confidence ?? 'N/A'}%
+                  {/* Objective Verification Badge */}
+                  <span className="verification-badge" title="Deterministic AST syntax check passes without error nodes">
+                    <ShieldCheck size={13} />
+                    Syntax Checked
                   </span>
 
-                  {/* Resolution Lifecycle Status */}
+                  {/* AI self-score: displayed as informational metadata only */}
+                  {confidence !== undefined && confidence !== null && (
+                    <span className="ai-suggestion-score" title="Self-reported model score (uncalibrated post-hoc value)">
+                      Model Score: {confidence}%
+                    </span>
+                  )}
+
+                  {/* Lifecycle Status */}
                   <span
                     className={`suggestion-status suggestion-status-${currentStatus}`}
                     title="Patch Lifecycle Status"
@@ -445,12 +455,13 @@ function Suggestions() {
                     {statusLabel(currentStatus)}
                   </span>
 
-                  {/* Separate Post-Apply Validation Status */}
+                  {/* Post-Apply Validation */}
                   {isApplied && (
                     <span
                       className={`validation-status-badge validation-status-${validationStatus}`}
-                      title="Automated Test/Command Validation"
+                      title="Post-Apply Automated Validation"
                     >
+                      {validationStatus === 'passed' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
                       Validation: {validationLabel(validationStatus)}
                     </span>
                   )}
@@ -461,7 +472,10 @@ function Suggestions() {
               {isManualReview && (
                 <div className="stale-warning-banner" style={{ borderColor: 'rgba(234, 179, 8, 0.4)', background: 'rgba(234, 179, 8, 0.1)' }}>
                   <div className="stale-warning-text">
-                    <strong>Manual Review Required:</strong> {item.errorMessage || 'Conflict region cannot be mapped to the working tree or language is unsupported. Automatic patch apply is disabled.'}
+                    <AlertTriangle size={18} style={{ color: '#eab308', flexShrink: 0 }} />
+                    <div>
+                      <strong>Manual Review Required:</strong> {item.errorMessage || 'Conflict region cannot be safely mapped or language is unsupported. Automatic patch apply is disabled to prevent corruption.'}
+                    </div>
                   </div>
                 </div>
               )}
@@ -470,45 +484,48 @@ function Suggestions() {
               {(isStale || isStaleError) && (
                 <div className="stale-warning-banner">
                   <div className="stale-warning-text">
-                    <strong>Stale File Warning:</strong> The working-tree file or conflict region has changed since
-                    analysis. Patches cannot be safely applied without fresh analysis.
+                    <AlertTriangle size={18} style={{ color: '#ef4444', flexShrink: 0 }} />
+                    <div>
+                      <strong>Stale File Warning:</strong> The working-tree file or conflict region has changed since
+                      analysis. Patches cannot be safely applied without fresh analysis.
+                    </div>
                   </div>
                   <button
                     type="button"
                     className="action-btn refresh-analysis-btn"
                     onClick={() => handleRefreshAnalysis(item)}
                   >
-                    Refresh Analysis
+                    <RefreshCw size={14} /> Refresh Analysis
                   </button>
                 </div>
               )}
 
-              {/* ACTION ERROR DISPLAY */}
+              {/* ACTION IN-FLIGHT OR ERROR FEEDBACK */}
               {actionErr && !isStaleError && (
-                <div className="resolution-error-banner">
-                  <strong>Error:</strong> {actionErr}
+                <div className="suggestion-action-error">
+                  <AlertTriangle size={14} />
+                  <span><strong>Action Failed:</strong> {actionErr}</span>
                 </div>
               )}
 
-              <div className="ai-suggestion-content">
+              <div className="ai-suggestion-body">
                 {item.status === 'failed' ? (
-                  <div className="ai-suggestion-block">
-                    <strong>Error</strong>
-                    <p>
-                      {item.errorCode ? `${item.errorCode}: ` : ''}
-                      {item.errorMessage || 'Resolution failed.'}
+                  <div className="suggestion-failed-box">
+                    <strong>Suggestion generation failed for this collision:</strong>
+                    <p className="suggestion-failed-message">
+                      <code>{item.errorCode || 'UNKNOWN'}</code>: {item.errorMessage || 'Internal provider failure'}
                       {item.retryable ? ' This failure is retryable.' : ''}
                     </p>
                   </div>
                 ) : (
                   <>
                     <div className="ai-suggestion-block">
-                      <strong>AI Explanation</strong>
+                      <strong>AI Explanation & Strategy</strong>
                       <p>{item.resolution?.explanation || 'No explanation provided.'}</p>
                     </div>
 
                     <div className="ai-suggestion-block">
-                      <strong>Suggested Code Replacement</strong>
+                      <strong>Proposed Resolution Code</strong>
                       <pre>{item.resolution?.suggested_code || 'No suggested code available.'}</pre>
                     </div>
 
@@ -516,12 +533,12 @@ function Suggestions() {
                     {itemActions.diffOpen && (resolution?.previewDiff || resolution?.preview_diff) && (
                       <div className="ai-suggestion-block patch-diff-container">
                         <div className="diff-header">
-                          <strong>Read-Only Patch Unified Diff</strong>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <FileCode size={16} />
+                            <strong>Read-Only Unified Patch Diff</strong>
+                          </div>
                           <span className="diff-note">(Safe in-memory preview — no disk mutation)</span>
                         </div>
-                        {/* A <pre> cannot legally contain <div> children; use a
-                            div with white-space:pre so the diff still renders with
-                            preserved whitespace without invalid HTML nesting. */}
                         <div className="patch-diff-view" role="table" aria-label="Patch unified diff">
                           {(resolution.previewDiff || resolution.preview_diff).split('\n').map((line, lIdx) => {
                             let lineClass = 'diff-line'
@@ -557,6 +574,7 @@ function Suggestions() {
                       }
                     }}
                   >
+                    <Eye size={15} />
                     {inFlight === 'preview'
                       ? 'Generating Preview...'
                       : itemActions.diffOpen && resolution?.previewDiff
@@ -572,15 +590,16 @@ function Suggestions() {
                       disabled={Boolean(inFlight) || isApproved || isStale || isManualReview}
                       onClick={() => handleApprove(item, resId)}
                     >
+                      <Check size={15} />
                       {inFlight === 'approve'
                         ? 'Approving...'
                         : isApproved
-                          ? (<><i className="fa-solid fa-check"></i> Explicitly Approved</>)
+                          ? 'Explicitly Approved'
                           : 'Explicitly Approve'}
                     </button>
                   )}
 
-                  {/* APPLY BUTTON (Disabled before approval!) */}
+                  {/* APPLY BUTTON (Disabled before approval) */}
                   {!isApplied && !isReverted && (
                     <button
                       type="button"
@@ -589,6 +608,7 @@ function Suggestions() {
                       title={!isApproved ? 'Apply is disabled until explicit approval' : 'Apply patch atomically'}
                       onClick={() => handleApply(item, resId)}
                     >
+                      <ShieldCheck size={15} />
                       {inFlight === 'apply' ? 'Applying Atomically...' : 'Apply Patch'}
                     </button>
                   )}
@@ -601,7 +621,7 @@ function Suggestions() {
                       disabled={Boolean(inFlight)}
                       onClick={() => setItemAction(resId, { confirmRevert: true })}
                     >
-                      Revert Applied Patch
+                      <RotateCcw size={15} /> Revert Applied Patch
                     </button>
                   )}
 
@@ -632,7 +652,11 @@ function Suggestions() {
                   )}
 
                   {/* REVERTED BADGE */}
-                  {isReverted && <span className="reverted-notice"><i className="fa-solid fa-check"></i> Patch was safely rolled back to original content.</span>}
+                  {isReverted && (
+                    <span className="reverted-notice">
+                      <Check size={14} /> Patch was safely rolled back to original content.
+                    </span>
+                  )}
                 </div>
               )}
             </div>

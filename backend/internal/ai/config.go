@@ -48,8 +48,10 @@ const (
 	DefaultOllamaModel = "qwen2.5-coder:7b"
 	// DefaultOllamaBaseURL is the standard local Ollama OpenAI-compatible port.
 	DefaultOllamaBaseURL = "http://localhost:11434/v1"
-	// DefaultGeminiModel is the documented default model for Gemini.
-	DefaultGeminiModel = "gemini-3.5-flash"
+	// DefaultGeminiModel is the documented default model for Gemini. It must
+	// be a model id that actually exists on the v1beta generateContent
+	// endpoint; the previously documented "gemini-3.5-flash" 404s.
+	DefaultGeminiModel = "gemini-2.0-flash"
 	// DefaultGroqModel is the documented default model for Groq.
 	DefaultGroqModel = "llama-3.3-70b-versatile"
 	// DefaultGroqBaseURL is Groq's OpenAI-compatible endpoint.

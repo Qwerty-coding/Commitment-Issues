@@ -57,6 +57,56 @@ func setupAnalysis(t *testing.T, content string) (promptcontext.FileAnalysis, []
 	return analysis, data
 }
 
+// The conflict sits inside the function body; the AI returns the WHOLE
+// enclosing function. Splicing it verbatim would duplicate the signature and
+// closing line — the file must stay single-copy corrected.
+func TestBuild_WholeFunctionReplacementNormalizedToRegion(t *testing.T) {
+	content := strings.Join([]string{
+		"function Calcular(a, b) {",
+		"	<<<<<<< HEAD",
+		"	return a + b;",
+		"	=======",
+		"	return a - b;",
+			">>>>>>> feature",
+		"}",
+		"module.exports = Calcular;",
+	}, "\n") + "\n"
+
+	analysis, data := setupAnalysis(t, content)
+	res := resolutions.Resolution{
+		ID:          "res-norm",
+		File:        "sample.js",
+		RegionID:    "0",
+		// Whole enclosing function (the classic model overreach).
+		Replacement: strings.Join([]string{
+			"function Calcular(a, b) {",
+			"	return a + b;",
+			"}",
+		}, "\n"),
+	}
+
+	result, err := Build(analysis, res, data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := strings.Count(result.ProposedContent, "function Calcular(a, b) {")
+	if got != 1 {
+		t.Fatalf("enclosing function signature duplicated %d times:\n%s", got, result.ProposedContent)
+	}
+	if got := strings.Count(result.ProposedContent, "module.exports = Calcular;"); got != 1 {
+		t.Fatalf("closing context duplicated %d times:\n%s", got, result.ProposedContent)
+	}
+	if result.ProposedContent != strings.Join([]string{
+		"function Calcular(a, b) {",
+		"	return a + b;",
+		"}",
+		"module.exports = Calcular;",
+	}, "\n")+"\n" {
+		t.Errorf("unexpected proposed content:\n%s", result.ProposedContent)
+	}
+}
+
 func TestBuild_OneRegionPreview(t *testing.T) {
 	content := sampleConflictFile(1)
 	analysis, data := setupAnalysis(t, content)

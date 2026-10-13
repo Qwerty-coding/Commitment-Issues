@@ -48,7 +48,7 @@ func BuildPromptContext(repositorySummary, repositoryReadme string, files []stri
 	selectedVariables := make([]parser.CodeElement, 0)
 	seen := make(map[string]struct{}, len(scope.Nodes))
 	for _, node := range scope.Nodes {
-		isFunction := strings.EqualFold(node.Kind, "Function")
+		isFunction := isCallableKind(node.Kind)
 		isVariable := strings.EqualFold(node.Kind, "Variable")
 		if !isFunction && !isVariable {
 			continue
@@ -275,6 +275,20 @@ func renderPromptContext(repositorySummary, repositoryReadme string, files []str
 	builder.WriteString("Use only the scoped functions above and the collision payload provided next to resolve the merge conflict.")
 
 	return builder.String()
+}
+
+// isCallableKind reports whether a semantic node kind represents code that
+// can be rendered into the AI prompt as executable logic. Methods and
+// constructors are first-class alongside plain functions so object-oriented
+// conflict scopes (Go receivers, Java/C# classes, JS/TS classes, Python
+// methods) reach the model instead of being silently dropped.
+func isCallableKind(kind string) bool {
+	switch strings.ToLower(kind) {
+	case "function", "method", "constructor":
+		return true
+	default:
+		return false
+	}
 }
 
 func uniqueStrings(values []string) []string {

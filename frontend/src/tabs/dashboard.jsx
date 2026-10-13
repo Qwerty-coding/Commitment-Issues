@@ -1,6 +1,7 @@
 import './dashboard.css'
 import { useEffect, useState } from 'react'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
+import { Folder, GitBranch, ArrowRight, Code2, AlertTriangle, Layers } from 'lucide-react'
 
 function Dashboard() {
   const [repoName, setRepoName] = useState("")
@@ -36,11 +37,8 @@ function Dashboard() {
         setError(err.message)
       })
       .finally(() => {
-        // Always reset loading — including when only the metadata fetch
-        // fails and the analysis fetch never resolves past abort.
         if (!controller.signal.aborted) setLoading(false)
       })
-
 
     return () => controller.abort()
   }, [])
@@ -61,16 +59,18 @@ function Dashboard() {
     )
   }
 
+  const totalCollisions = analysis.reduce((sum, item) => sum + (item.smartDiff?.collisions?.length || 0), 0)
+
   return (
     <div className="dashboard-page">
       <div className="welcome-section">
         <h1>Welcome back</h1>
-        <p>Here are the AST diffs and conflicted files across your repo.</p>
+        <p>AST structural diffs, active collisions, and workspace merge status.</p>
       </div>
 
       <div className="repository-card">
         <div className="repository-icon">
-          <i className="fa-regular fa-folder"></i>
+          <Folder size={28} />
         </div>
 
         <div className="repository-content">
@@ -78,30 +78,40 @@ function Dashboard() {
 
           <div className="branch-flow">
             <div className="branch current-branch">
-              <i className="fa-solid fa-code-branch"></i>
+              <GitBranch size={16} />
               <span>{currentBranch || 'unknown'}</span>
             </div>
 
-            <i className="fa-solid fa-arrow-right branch-arrow"></i>
+            <ArrowRight size={16} className="branch-arrow" />
 
             <div className="branch main-branch">
-              <i className="fa-solid fa-code-branch"></i>
+              <GitBranch size={16} />
               <span>{incomingBranch || 'incoming'}</span>
             </div>
           </div>
 
           <div className="repository-divider"></div>
           <div className="workspace-text">
-            <i className="fa-solid fa-code"></i>
-            <span>Your current merge workspace</span>
+            <Code2 size={16} />
+            <span>Active merge workspace</span>
           </div>
         </div>
       </div>
 
       <div className="dashboard-summary">
         <div className="summary-card">
-          <h3>Conflicted files</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+            <h3>Conflicted Files</h3>
+          </div>
           <span>{analysis.length}</span>
+        </div>
+        <div className="summary-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Layers size={18} style={{ color: 'var(--brand)' }} />
+            <h3>Structural Collisions</h3>
+          </div>
+          <span>{totalCollisions}</span>
         </div>
       </div>
 
@@ -128,7 +138,7 @@ function Dashboard() {
 
               {item.smartDiff?.collisions?.length > 0 ? (
                 <div className="analysis-preview">
-                  <h4>AST Collision preview</h4>
+                  <h4>AST Collision Preview</h4>
                   {item.smartDiff.collisions.map((collision, index) => (
                     <div className="preview-row" key={`${collision.kind || 'item'}-${collision.name || collision.line || index}-${index}`}>
                       <strong>{collision.kind} {collision.name}</strong>
@@ -150,4 +160,4 @@ function Dashboard() {
   )
 }
 
-export default Dashboard;
+export default Dashboard

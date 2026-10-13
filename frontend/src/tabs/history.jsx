@@ -1,4 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
+import {
+  Clock,
+  RefreshCw,
+  AlertCircle,
+  CheckCircle2,
+  AlertTriangle,
+  FolderGit2,
+  Cpu,
+  Activity,
+} from 'lucide-react'
 import './history.css'
 
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
@@ -11,10 +21,10 @@ function formatTimestamp(value) {
 }
 
 function runStatus(run) {
-  if (run.cancelled) return { label: 'Cancelled', tone: 'warning' }
-  if (run.timedOut) return { label: 'Timed out', tone: 'warning' }
-  if (!run.completedAt) return { label: 'In progress', tone: 'pending' }
-  return { label: 'Completed', tone: 'ok' }
+  if (run.cancelled) return { label: 'Cancelled', tone: 'warning', icon: AlertTriangle }
+  if (run.timedOut) return { label: 'Timed out', tone: 'warning', icon: AlertTriangle }
+  if (!run.completedAt) return { label: 'In progress', tone: 'pending', icon: Clock }
+  return { label: 'Completed', tone: 'ok', icon: CheckCircle2 }
 }
 
 function History() {
@@ -53,7 +63,10 @@ function History() {
     return (
       <div className="history-page">
         <h1>Run History</h1>
-        <div className="history-empty">Loading run history...</div>
+        <div className="history-empty">
+          <Clock size={20} style={{ display: 'inline-block', verticalAlign: 'middle', marginRight: 8, color: '#6366f1' }} />
+          <span>Loading run history...</span>
+        </div>
       </div>
     )
   }
@@ -63,8 +76,10 @@ function History() {
       <div className="history-page">
         <h1>Run History</h1>
         <div className="history-empty history-error">
+          <AlertCircle size={24} style={{ color: '#ef4444', marginBottom: 8 }} />
           <p>Error loading history: {error}</p>
           <button type="button" className="history-retry" onClick={retry}>
+            <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
             Retry
           </button>
         </div>
@@ -77,6 +92,7 @@ function History() {
       <div className="history-header">
         <h1>Run History</h1>
         <button type="button" className="history-refresh" onClick={retry}>
+          <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
           Refresh
         </button>
       </div>
@@ -86,20 +102,29 @@ function History() {
 
       {runs.length === 0 ? (
         <div className="history-empty">
-          No runs recorded yet. Start the server with a conflicted repository to populate history.
+          <Activity size={24} style={{ color: '#94a3b8', marginBottom: 8 }} />
+          <div>No runs recorded yet. Start the server with a conflicted repository to populate history.</div>
         </div>
       ) : (
         <div className="history-grid">
           {runs.map((run) => {
             const status = runStatus(run)
+            const StatusIcon = status.icon
             return (
               <div className="history-card" key={`${run.runId}-${run.repository}`}>
                 <div className="history-card-head">
-                  <h3>{run.repository}</h3>
-                  <span className={`history-status history-status-${status.tone}`}>{status.label}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <FolderGit2 size={18} style={{ color: '#4f46e5' }} />
+                    <h3>{run.repository}</h3>
+                  </div>
+                  <span className={`history-status history-status-${status.tone}`}>
+                    {StatusIcon && <StatusIcon size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />}
+                    {status.label}
+                  </span>
                 </div>
 
                 <div className="history-provider">
+                  <Cpu size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
                   {run.provider}
                   {run.model ? ` · ${run.model}` : ''}
                 </div>

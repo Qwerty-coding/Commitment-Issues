@@ -181,6 +181,14 @@ func GenerateSmartDiffContext(ctx context.Context, base, ours, theirs parser.AST
 	return result, nil
 }
 
+// DeclarationKey matches code elements across signature changes: it uses
+// every stable identity field EXCEPT the signature, so a function whose
+// parameter list was edited on one or both branches keeps a single logical
+// identity (file + scope + kind + name).
+func DeclarationKey(el parser.CodeElement) string {
+	return fmt.Sprintf("%s|%s|%s|%s", el.File, el.Scope, el.Kind, el.Name)
+}
+
 func GenerateSmartDiff(ctx context.Context, base, ours, theirs parser.ASTContext) SmartDiffResult {
 	baseMap := BuildSignatureMap(base)
 	oursMap := BuildSignatureMap(ours)
@@ -233,6 +241,13 @@ func GenerateSmartDiff(ctx context.Context, base, ours, theirs parser.ASTContext
 		}
 	}
 
+	// Second pass: match declarations whose signature changed, which the
+	// identity-keyed pass above is blind to. When the same declaration (same
+	// file, scope, kind and name) was edited on BOTH sides with differing
+	// results — including signature edits — it is one structural collision,
+	// not a false "delete + independent add" pair.
+	result = reconcileDeclarationCollisions(result, base, ours, theirs)
+
 	// Every collection is emitted in the canonical deterministic order so that
 	// map iteration order can never influence output.
 	SortDiffItems(result.OurChanges)
@@ -240,6 +255,135 @@ func GenerateSmartDiff(ctx context.Context, base, ours, theirs parser.ASTContext
 	SortDiffItems(result.Collisions)
 
 	return result
+}
+
+// reconcileDeclarationCollisions detects structural collisions on
+// declarations whose SIGNATURE changed on both branches — the case the
+// identity-keyed diff above is blind to (base identity vanishes on both
+// sides, which otherwise renders as a false "deleted + two independent adds"
+// pair).
+//
+// The precise rule: for a declaration (same file, scope, kind, name), the
+// base must hold exactly one element, both sides must hold exactly one
+// element whose identity is NOT in the base, and the two new-identity
+// elements must differ. That single logical change is reported as ONE
+// collision (Identity = "decl|" + DeclarationKey) and the false per-identity
+// ADDED/DELETED entries are removed from both change lists.
+func reconcileDeclarationCollisions(result SmartDiffResult, base, ours, theirs parser.ASTContext) SmartDiffResult {
+	type group struct {
+		base, our, their map[string]parser.CodeElement // identity -> element
+	}
+	decls := make(map[string]*group)
+	ensure := func(k string) *group {
+		g, ok := decls[k]
+		if !ok {
+			g = &group{base: map[string]parser.CodeElement{}, our: map[string]parser.CodeElement{}, their: map[string]parser.CodeElement{}}
+			decls[k] = g
+		}
+		return g
+	}
+	for _, el := range base.Functions {
+		ensure(DeclarationKey(el)).base[SymbolIdentity(el)] = el
+	}
+	for _, el := range ours.Functions {
+		ensure(DeclarationKey(el)).our[SymbolIdentity(el)] = el
+	}
+	for _, el := range theirs.Functions {
+		ensure(DeclarationKey(el)).their[SymbolIdentity(el)] = el
+	}
+
+	// Deterministic iteration: keys sorted ascending.
+	keys := make([]string, 0, len(decls))
+	for k := range decls {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		g := decls[key]
+		if len(g.base) != 1 || len(g.our) != 1 || len(g.their) != 1 {
+			// Overloads, multiple base entries or one-sided declarations are
+			// matched by identity; grouping them differently could merge
+			// genuinely distinct symbols.
+			continue
+		}
+		var baseEl, ourEl, theirEl parser.CodeElement
+		for id, el := range g.base {
+			_ = id
+			baseEl = el
+		}
+		var ourNewID, theirNewID string
+		for id, el := range g.our {
+			ourEl = el
+			ourNewID = id
+		}
+		for id, el := range g.their {
+			theirEl = el
+			theirNewID = id
+		}
+		_, ourInBase := g.base[ourNewID]
+		_, theirInBase := g.base[theirNewID]
+		if ourInBase || theirInBase {
+			// At least one side kept the base identity: the identity-keyed pass
+			// already handled any collision or update for this declaration.
+			continue
+		}
+		// Element at the same decl key on each side, with distinct identity per
+		// side and one base element: identity pass reported base DELETED on both
+		// sides plus two independent ADDED entries — the blind spot.
+		if ourEl.Content == theirEl.Content {
+			continue // both sides converged on the same result
+		}
+
+		result.Collisions = append(result.Collisions, DiffItem{
+			Type: "COLLISION", Kind: ourEl.Kind, Name: ourEl.Name, Line: ourEl.Line,
+			File:        elementFile(baseEl, ourEl),
+			BaseContent: baseEl.Content, OurContent: ourEl.Content, TheirContent: theirEl.Content,
+			Identity: "decl|" + key,
+		})
+
+		// Drop the false identity-pass entries this collision replaces: the
+		// base (reported deleted on both sides) and the two add-pairs.
+		dropOurs := map[string]struct{}{SymbolIdentity(baseEl): {}, ourNewID: {}}
+		dropTheirs := map[string]struct{}{SymbolIdentity(baseEl): {}, theirNewID: {}}
+		result.OurChanges = dropIdentityEntries(result.OurChanges, dropOurs, ourEl)
+		result.TheirChanges = dropIdentityEntries(result.TheirChanges, dropTheirs, theirEl)
+	}
+
+	return result
+}
+
+// dropIdentityEntries removes change entries matching one of the given
+// identities, or any entry for the same declaration (kind+name).
+func dropIdentityEntries(items []DiffItem, dropIDs map[string]struct{}, ref parser.CodeElement) []DiffItem {
+	kept := items[:0]
+	for _, item := range items {
+		if _, drop := dropIDs[item.Identity]; drop {
+			continue
+		}
+		if strings.EqualFold(item.Kind, ref.Kind) && item.Name == ref.Name {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
+}
+
+// callableKind reports whether a symbol kind can carry CALLS edges in the
+// semantic call graph. Methods, constructors and functions are callable;
+// classes, interfaces, structs, enums, modules, files and variables are not.
+func callableKind(kind string) bool {
+	switch strings.ToLower(kind) {
+	case "function", "method", "constructor":
+		return true
+	default:
+		return false
+	}
+}
+
+// callableKind is the SemanticNode method form of callableKind.
+func (n SemanticNode) callableKind() bool {
+	return callableKind(n.Kind)
 }
 
 func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
@@ -259,12 +403,12 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 		}
 		result.Nodes = append(result.Nodes, node)
 		nodeByKey[node.Identity] = node
-		if node.Kind == "Function" {
-			nameKey := strings.ToLower(node.Name)
-			if existing, ok := funcByName[nameKey]; !ok || node.ID < existing.ID {
-				funcByName[nameKey] = node
-			}
+	if node.callableKind() {
+		nameKey := strings.ToLower(node.Name)
+		if existing, ok := funcByName[nameKey]; !ok || node.ID < existing.ID {
+			funcByName[nameKey] = node
 		}
+	}
 	}
 
 	for _, v := range ctx.Variables {
@@ -282,7 +426,7 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 
 	edgeSeen := make(map[string]struct{})
 	for _, fn := range ctx.Functions {
-		if fn.Kind != "Function" {
+		if !callableKind(fn.Kind) {
 			continue
 		}
 		sourceID := semanticNodeIDFor(fn)

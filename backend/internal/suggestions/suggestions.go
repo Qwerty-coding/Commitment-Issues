@@ -32,6 +32,7 @@ import (
 	resolutions "CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
+	verification "CommitIssues/internal/verification"
 )
 
 // DefaultMaxConcurrency bounds concurrent AI requests when the caller does
@@ -161,7 +162,7 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 			key := collisionKey(collision)
 			if stored, ok := run.FindSuggestion(analysis.Repository, analysis.File, key); ok {
 				switch stored.Status {
-				case runstate.StatusComplete, runstate.StatusBelowThreshold:
+				case runstate.StatusComplete, runstate.StatusManualReview:
 					if stored.ResolutionID == "" && run != nil {
 						if res, found := run.FindResolutionBySuggestion(stored.ID); found {
 							stored.ResolutionID = res.ID
@@ -209,7 +210,7 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 			// Another request may have completed this collision meanwhile.
 			if stored, ok := run.FindSuggestion(t.analysis.Repository, t.analysis.File, t.key); ok {
 				switch stored.Status {
-				case runstate.StatusComplete, runstate.StatusBelowThreshold:
+				case runstate.StatusComplete, runstate.StatusManualReview:
 					if stored.ResolutionID == "" && run != nil {
 						if res, found := run.FindResolutionBySuggestion(stored.ID); found {
 							stored.ResolutionID = res.ID
@@ -230,7 +231,7 @@ func (g *Generator) generate(ctx context.Context, run *runstate.Run, analyses []
 			switch item.Status {
 			case runstate.StatusComplete:
 				meta.Generated++
-			case runstate.StatusBelowThreshold:
+			case runstate.StatusManualReview:
 				meta.Generated++
 				meta.BelowThreshold++
 			case runstate.StatusFailed:
@@ -358,17 +359,21 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 
 	item.Resolution = *res
 	item.Status = runstate.StatusComplete
-	if res.Confidence < g.Cfg.ConfidenceThreshold {
-		item.Status = runstate.StatusBelowThreshold
+
+	// Local deterministic verification replaces the (deprecated) AI
+	// self-reported confidence gating per docs/design_decisions.md.
+	verificationRes := verification.Evaluate(analysis.File, res.SuggestedCode, region)
+	if verificationRes.Status == verification.StatusNeedsReview {
+		item.Status = runstate.StatusManualReview
 	}
 
-	if run != nil && (item.Status == runstate.StatusComplete || item.Status == runstate.StatusBelowThreshold) {
+	if run != nil && (item.Status == runstate.StatusComplete || item.Status == runstate.StatusManualReview) {
 		contextHash := ""
 		if analysis.RegionContextHashes != nil && regionID != "" {
 			contextHash = analysis.RegionContextHashes[regionID]
 		}
 		initStatus := resolutions.StatusProposed
-		if !parser.IsSupportedLanguage(analysis.File) || !hasRegion || regionID == "" {
+		if !parser.IsSupportedLanguage(analysis.File) || !hasRegion || regionID == "" || item.Status == runstate.StatusManualReview {
 			initStatus = resolutions.StatusManualReview
 		}
 		resolutionRecord := resolutions.Resolution{
@@ -432,7 +437,7 @@ func (g *Generator) recordHistory(ctx context.Context, run *runstate.Run, analys
 				switch item.Status {
 				case runstate.StatusComplete:
 					succeeded++
-				case runstate.StatusBelowThreshold:
+				case runstate.StatusManualReview:
 					below++
 				case runstate.StatusFailed:
 					failed++
