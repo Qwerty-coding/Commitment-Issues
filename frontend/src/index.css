@@ -3,11 +3,35 @@
 
 :root {
   --navbar-height: 56px;
-  --brand: #6d3df5;
-  --brand-soft: #f0eaff;
+  --brand: #2563eb;
+  --brand-soft: #eff6ff;
   --bg: #f8f9fb;
+  --bg-primary: #f8f9fb;
+  --card-bg: #ffffff;
   --card-border: #e1e4e8;
+  --text-primary: #101828;
+  --text-secondary: #475467;
+  --text-muted: #667085;
+  --code-bg: #f6f8fa;
   --radius: 14px;
+  color-scheme: light;
+}
+
+/* Dark theme: toggled by setting data-theme="dark" on <html>. Kept as an
+   override of the same tokens so every existing stylesheet follows along
+   without per-component changes. */
+:root[data-theme='dark'] {
+  --brand: #3b82f6;
+  --brand-soft: rgba(59, 130, 246, 0.15);
+  --bg: #0d1117;
+  --bg-primary: #0d1117;
+  --card-bg: #161b22;
+  --card-border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #adbac7;
+  --text-muted: #768390;
+  --code-bg: #0b0f14;
+  color-scheme: dark;
 }
 
 * {
@@ -21,9 +45,9 @@
   margin: 60px auto;
   padding: 36px;
   border-radius: 16px;
-  background: white;
-  border: 1px solid #e5e7eb;
-  color: #101828;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  color: var(--text-primary);
 }
 
 .app-error-boundary h2,
@@ -59,6 +83,7 @@ body {
   margin: 0;
   background: var(--bg);
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
-  color: #101828;
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }

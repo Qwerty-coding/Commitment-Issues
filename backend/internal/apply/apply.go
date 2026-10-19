@@ -231,6 +231,18 @@ func Apply(
 	res.PostApplyContentHash = expectedPostHash
 	res = run.SaveResolution(res)
 
+	// ── Step 9b: re-anchor the stored analysis ────────────────────────────
+	// Applying one region shifts the line numbers of every later region and
+	// changes the file's content hash. Without re-anchoring, the next region's
+	// preview/apply would fail the stale-file check and force a full
+	// re-analysis + AI regeneration for every remaining region (an O(N^2)
+	// LLM cost for N regions). Here we re-parse the freshly written file and,
+	// when every remaining region can be matched unambiguously, update the
+	// stored snapshot in place so existing suggestions stay valid. When the
+	// mapping is ambiguous we leave the snapshot untouched (it will read as
+	// stale, which is the safe pre-existing behaviour).
+	reanchored := reanchorAnalysis(run, analysis, absRepo, req.File, absPath)
+
 	run.RecordResolutionEvent(resolutions.ResolutionEvent{
 		ResolutionID:   res.ID,
 		RunID:          res.RunID,
@@ -241,6 +253,7 @@ func Apply(
 		PreviousStatus: prevStatus,
 		NewStatus:      resolutions.StatusApplied,
 	})
+	_ = reanchored
 
 	// ── Step 10: run validation (optional) ───────────────────────────────
 	var valResult *validation.Result
@@ -318,6 +331,68 @@ func Apply(
 		ValidationResult: valResult,
 		PostApplyHash:    postHash,
 	}, nil
+}
+
+// reanchorAnalysis re-parses the file just written and, when every remaining
+// conflict region can be matched unambiguously, refreshes the stored analysis
+// snapshot (content hash, region line numbers, context hashes) so the other
+// regions' existing suggestions remain valid. It also remaps the RegionID of
+// every other pending resolution for the same file to the new region index.
+//
+// Returns true when the snapshot was successfully re-anchored. On false the
+// snapshot is left untouched (safe: the file simply reads as stale).
+func reanchorAnalysis(
+	run *runstate.Run,
+	prev promptcontext.FileAnalysis,
+	repoRoot, file, absPath string,
+) bool {
+	newContent, err := os.ReadFile(absPath)
+	if err != nil {
+		return false
+	}
+
+	result := promptcontext.ReanchorAnalysis(prev, newContent)
+	if !result.OK {
+		return false
+	}
+
+	run.RegisterAnalysis(repoRoot, result.Analysis)
+
+	// Remap the RegionID of every still-actionable resolution for this file so
+	// its next preview/apply targets the shifted region index. The applied
+	// region's own resolution is already StatusApplied and is skipped.
+	for _, other := range run.ResolutionsFor(repoRoot, file) {
+		if other.ID == "" {
+			continue
+		}
+		switch other.Status {
+		case resolutions.StatusProposed, resolutions.StatusPreviewed, resolutions.StatusApproved:
+			newID, ok := result.MappedRegionIDs[other.RegionID]
+			if !ok {
+				continue
+			}
+			if newID == other.RegionID {
+				continue
+			}
+			other.RegionID = newID
+			other.ContentHash = result.Analysis.ContentHash
+			if result.Analysis.RegionContextHashes != nil {
+				other.ContextHash = result.Analysis.RegionContextHashes[newID]
+			}
+			for _, reg := range result.Analysis.ConflictRegions {
+				if fmt.Sprintf("%d", reg.Index) == newID {
+					other.StartLine = reg.StartLine
+					other.EndLine = reg.EndLine
+					other.Base = reg.Base
+					other.Ours = reg.Ours
+					other.Theirs = reg.Theirs
+					break
+				}
+			}
+			run.SaveResolution(other)
+		}
+	}
+	return true
 }
 
 // RollbackRequest carries the parameters for a rollback operation.

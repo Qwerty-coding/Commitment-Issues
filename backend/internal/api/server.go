@@ -65,6 +65,30 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// corsMiddleware applies the cross-origin policy for every API route.
+//
+// The frontend is commonly served from a different origin (Vite on :5173,
+// the static bundle on :8080, or a reverse proxy). Cross-origin POSTs with
+// Content-Type: application/json trigger a browser CORS preflight, so the
+// middleware must answer OPTIONS with 204 and the allowed methods/headers
+// BEFORE any handler runs. Without this, handlers that require a body (e.g.
+// graph inspection, prompt, compare, resolutions) would answer the preflight
+// with 400 and no CORS headers, and the browser would abort the real request.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "600")
+		if r.Method == http.MethodOptions {
+			// Preflight: no body, no handler dispatch.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // StartGraphServer serves the API and static frontend using the supplied
 // run-scoped state and bounded run history. A nil run is treated as an empty
 // run; a nil history disables the history endpoint's data (it returns an
@@ -111,6 +135,9 @@ func StartGraphServer(ctx context.Context, run *runstate.Run, history *runstate.
 // NewHandler builds the API + static-file handler for a run and its bounded
 // history. It is exported so handler behavior can be verified through the
 // real HTTP interface without starting a listener.
+//
+// Middleware order (outermost first): CORS (answers preflight before any
+// route matching) then security headers.
 func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 	if run == nil {
 		run = runstate.NewRun()
@@ -245,7 +272,10 @@ func NewHandler(run *runstate.Run, history *runstate.History) http.Handler {
 	// Phase 4B: commit and repository comparison endpoints.
 	registerCompareHandlers(mux, run)
 
-	return securityHeadersMiddleware(mux)
+	// Phase 5B: git ref listing for the compare tab's autocomplete.
+	registerGitRefHandlers(mux, run)
+
+	return corsMiddleware(securityHeadersMiddleware(mux))
 }
 
 // handleSuggestions generates run-scoped AI suggestions using the

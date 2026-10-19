@@ -70,6 +70,7 @@ var serveCmd = &cobra.Command{
 				Name:           filepath.Base(repoRoot),
 				CurrentBranch:  git.CurrentBranch(repoRoot),
 				IncomingBranch: git.IncomingBranch(repoRoot),
+				Path:           repoRoot,
 			})
 		}
 		for _, repoRoot := range repoRoots {

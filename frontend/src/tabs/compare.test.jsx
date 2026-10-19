@@ -47,10 +47,16 @@ const baseResult = {
 }
 
 function mockFetch(payload, ok = true) {
-  return vi.fn().mockResolvedValue({
-    ok,
-    status: ok ? 200 : 400,
-    json: async () => payload,
+  return vi.fn().mockImplementation((url) => {
+    // The ref-autocomplete call fires on mount; return an empty ref list.
+    if (typeof url === 'string' && url.includes('/api/git/branches')) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: [] }) })
+    }
+    return Promise.resolve({
+      ok,
+      status: ok ? 200 : 400,
+      json: async () => payload,
+    })
   })
 }
 
@@ -70,10 +76,11 @@ describe('Compare tab', () => {
     expect(screen.getByRole('button', { name: /Compare/i })).toBeInTheDocument()
   })
 
-  it('rejects submission without both refs and never calls the API', () => {
+  it('rejects submission without both refs and never calls the compare API', () => {
     render(<Compare />)
     fireEvent.click(screen.getByRole('button', { name: /Compare/i }))
-    expect(globalThis.fetch).not.toHaveBeenCalled()
+    const compareCalls = globalThis.fetch.mock.calls.filter(([url]) => String(url).includes('/api/compare'))
+    expect(compareCalls.length).toBe(0)
     expect(screen.getByText(/required/i)).toBeInTheDocument()
   })
 
@@ -83,9 +90,13 @@ describe('Compare tab', () => {
     fireEvent.change(screen.getByLabelText(/Theirs/i), { target: { value: 'feature-b' } })
     fireEvent.click(screen.getByRole('button', { name: /Compare/i }))
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      const compareCalls = globalThis.fetch.mock.calls.filter(([url]) => String(url).includes('/api/compare'))
+      expect(compareCalls.length).toBe(1)
+    })
 
-    const [url, options] = globalThis.fetch.mock.calls[0]
+    const compareCall = globalThis.fetch.mock.calls.find(([url]) => String(url).includes('/api/compare'))
+    const [url, options] = compareCall
     expect(url).toContain('/api/compare')
     const body = JSON.parse(options.body)
     expect(body.oursRef).toBe('feature-a')

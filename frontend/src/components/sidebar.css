@@ -53,7 +53,6 @@
 .sidebar-link {
     display: flex;
     align-items: center;
-    gap: 12px;
     width: 100%;
     padding: 10px 14px;
     border-radius: 8px;
@@ -71,15 +70,6 @@
 
 .sidebar-link.active {
     color: #ffffff;
-    background-color: var(--brand, #6d3df5);
-    box-shadow: 0 2px 8px rgba(109, 61, 245, 0.3);
-}
-
-.sidebar-icon {
-    flex-shrink: 0;
-    opacity: 0.85;
-}
-
-.sidebar-link.active .sidebar-icon {
-    opacity: 1;
+    background-color: var(--brand, #2563eb);
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
 }

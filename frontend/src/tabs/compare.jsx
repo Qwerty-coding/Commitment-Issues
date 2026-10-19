@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { GitCompare } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
 import './compare.css'
 
@@ -36,13 +35,40 @@ function Compare() {
   const [ours, setOurs] = useState('')
   const [theirs, setTheirs] = useState('')
 
+  const [refs, setRefs] = useState([])
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [activating, setActivating] = useState(false)
+  const [activated, setActivated] = useState(false)
 
   // Abort any in-flight comparison when the tab unmounts.
   const abortRef = useRef(null)
   useEffect(() => () => abortRef.current?.abort(), [])
+
+  // Load branches/tags/remote refs for the ref inputs so users select a ref
+  // instead of typing a hash (a single typo otherwise fails the comparison).
+  const refsAbortRef = useRef(null)
+  const loadRefs = useCallback((repoPath) => {
+    refsAbortRef.current?.abort()
+    const controller = new AbortController()
+    refsAbortRef.current = controller
+    const target = (repoPath || '.').trim() || '.'
+    fetchJson(`${API_BASE}/api/git/branches?repositoryRoot=${encodeURIComponent(target)}`, {
+      signal: controller.signal,
+    })
+      .then((payload) => setRefs(Array.isArray(payload.data) ? payload.data : []))
+      .catch((err) => {
+        if (isAbort(err)) return
+        // Non-fatal: the inputs remain free-text if ref listing fails.
+        setRefs([])
+      })
+  }, [])
+
+  useEffect(() => {
+    loadRefs('.')
+    return () => refsAbortRef.current?.abort()
+  }, [loadRefs])
 
   const runCompare = async (event) => {
     event.preventDefault()
@@ -72,11 +98,35 @@ function Compare() {
         }),
       })
       setResult(payload.data)
+      setActivated(false)
     } catch (err) {
       if (isAbort(err)) return
       setError({ message: err.message, code: err.code || '' })
     } finally {
       if (!controller.signal.aborted) setLoading(false)
+    }
+  }
+
+  const activateComparisonWorkspace = async () => {
+    if (!ours.trim() || !theirs.trim()) return
+    setActivating(true)
+    try {
+      await fetchJson(`${API_BASE}/api/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repositoryRoot: repo.trim() || '.',
+          baseRef: base.trim(),
+          oursRef: ours.trim(),
+          theirsRef: theirs.trim(),
+          activate: true,
+        }),
+      })
+      setActivated(true)
+    } catch (err) {
+      console.error('Activation failed:', err)
+    } finally {
+      setActivating(false)
     }
   }
 
@@ -91,22 +141,48 @@ function Compare() {
       <form className="compare-form" onSubmit={runCompare}>
         <label className="compare-field">
           <span>Repository path</span>
-          <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="." />
+          <input
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            onBlur={(e) => loadRefs(e.target.value)}
+            placeholder="."
+          />
         </label>
         <label className="compare-field">
           <span>Base (optional)</span>
-          <input value={base} onChange={(e) => setBase(e.target.value)} placeholder="auto-detected merge base" />
+          <input
+            list="compare-refs"
+            value={base}
+            onChange={(e) => setBase(e.target.value)}
+            placeholder="auto-detected merge base"
+          />
         </label>
         <label className="compare-field">
           <span>Ours</span>
-          <input value={ours} onChange={(e) => setOurs(e.target.value)} placeholder="commit hash or branch" />
+          <input
+            list="compare-refs"
+            value={ours}
+            onChange={(e) => setOurs(e.target.value)}
+            placeholder="commit hash or branch"
+          />
         </label>
         <label className="compare-field">
           <span>Theirs</span>
-          <input value={theirs} onChange={(e) => setTheirs(e.target.value)} placeholder="commit hash or branch" />
+          <input
+            list="compare-refs"
+            value={theirs}
+            onChange={(e) => setTheirs(e.target.value)}
+            placeholder="commit hash or branch"
+          />
         </label>
-        <button type="submit" className="compare-submit" disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          <GitCompare size={16} />
+        <datalist id="compare-refs">
+          {refs.map((ref) => (
+            <option key={`${ref.type}-${ref.name}`} value={ref.name}>
+              {ref.type}{ref.commit ? ` · ${ref.commit}` : ''}
+            </option>
+          ))}
+        </datalist>
+        <button type="submit" className="compare-submit" disabled={loading}>
           {loading ? 'Comparing…' : 'Compare'}
         </button>
       </form>
@@ -131,9 +207,29 @@ function Compare() {
                   : `Merge base: ${result.baseRef || 'n/a'}`}
               </p>
             </div>
-            <div className="compare-refs">
-              <span>Ours: {result.oursRef}</span>
-              <span>Theirs: {result.theirsRef}</span>
+            <div className="compare-refs" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+              <div>
+                <span>Ours: {result.oursRef}</span>
+                <span style={{ marginLeft: 8 }}>Theirs: {result.theirsRef}</span>
+              </div>
+              <button
+                type="button"
+                onClick={activateComparisonWorkspace}
+                disabled={activating}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  borderRadius: '6px',
+                  border: '1px solid var(--brand, #2563eb)',
+                  background: activated ? 'var(--card-bg, #ffffff)' : 'var(--brand, #2563eb)',
+                  color: activated ? 'var(--brand, #2563eb)' : '#ffffff',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {activating ? 'Updating Entire Site…' : activated ? 'Workspace Updated (Viewing Comparison)' : 'Focus Entire Site on this Comparison'}
+              </button>
             </div>
           </div>
 

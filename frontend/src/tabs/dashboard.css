@@ -35,7 +35,7 @@
     width: 100%;
     max-width: 1200px;
 
-    background: white;
+    background: var(--card-bg, #ffffff);
     border: 1px solid var(--card-border, #e1e4e8);
     border-radius: 14px;
 
@@ -46,29 +46,6 @@
     gap: 24px;
 
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.04);
-}
-
-
-/* Folder icon */
-
-.repository-icon {
-    width: 64px;
-    height: 64px;
-
-    border-radius: 50%;
-
-    background: var(--brand-soft, #f0eaff);
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    flex-shrink: 0;
-}
-
-.repository-icon i {
-    font-size: 28px;
-    color: var(--brand, #6d3df5);
 }
 
 
@@ -84,7 +61,7 @@
     font-size: 22px;
     font-weight: 700;
 
-    color: #101828;
+    color: var(--text-primary, #101828);
 }
 
 
@@ -112,8 +89,8 @@
 }
 
 .current-branch {
-    color: var(--brand, #6d3df5);
-    background: var(--brand-soft, #f3efff);
+    color: var(--brand, #2563eb);
+    background: var(--brand-soft, #eff6ff);
 }
 
 .main-branch {
@@ -166,20 +143,23 @@
 
     border-radius: 10px;
 
-    background: var(--brand-soft, #f3efff);
-    color: var(--brand, #6d3df5);
+    background: var(--brand-soft, #eff6ff);
+    color: var(--brand, #2563eb);
 
     font-size: 16px;
 }
 
 .dashboard-summary {
     margin: 24px 0 16px;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 20px;
+    width: 100%;
+    max-width: 1200px;
 }
 
 .summary-card {
-    background: white;
+    background: var(--card-bg, #ffffff);
     border: 1px solid var(--card-border, #e1e4e8);
     border-radius: 14px;
     padding: 18px;
@@ -190,24 +170,26 @@
 .summary-card h3 {
     margin: 0 0 10px;
     font-size: 16px;
-    color: #667085;
+    color: var(--text-secondary, #667085);
 }
 
 .summary-card span {
     font-size: 30px;
     font-weight: 700;
-    color: #101828;
+    color: var(--text-primary, #101828);
 }
 
 .analysis-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 20px;
     margin-top: 20px;
+    width: 100%;
+    max-width: 1200px;
 }
 
 .analysis-card {
-    background: white;
+    background: var(--card-bg, #ffffff);
     border: 1px solid var(--card-border, #e1e4e8);
     border-radius: 12px;
     padding: 24px;
@@ -217,6 +199,7 @@
     gap: 18px;
     overflow: hidden;
     min-width: 0;
+    width: 100%;
 }
 
 .analysis-card-header {
@@ -323,4 +306,33 @@
 .empty-state p {
     margin: 0;
     color: #667085;
+}/* 3-way collision preview: show Base/Ours/Theirs side by side instead of a
+   single side, so the dashboard reflects the actual conflict. */
+.preview-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.preview-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.preview-side em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #667085);
+}
+
+.preview-side pre {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
 }

@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
+import Highlight from '../components/Highlight'
+import { languageForFile } from '../lib/highlightLang'
 import {
-  Sparkles,
-  Check,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Eye,
   RefreshCw,
   FileCode,
-  ShieldCheck,
+  Pencil,
 } from 'lucide-react'
 import './suggestions.css'
 
@@ -139,6 +138,12 @@ function Suggestions() {
     setReloadKey((key) => key + 1)
   }, [])
 
+  useEffect(() => {
+    const onRefreshEvent = () => retry()
+    window.addEventListener('ci:refresh-analysis', onRefreshEvent)
+    return () => window.removeEventListener('ci:refresh-analysis', onRefreshEvent)
+  }, [retry])
+
   const setItemAction = (id, updates) => {
     setActionState((prev) => ({
       ...prev,
@@ -146,8 +151,13 @@ function Suggestions() {
     }))
   }
 
-  // Handle Preview
-  const handlePreview = async (item, resId) => {
+  // Index of the card the keyboard shortcuts act on; kept in range below.
+  const [selectedIndex, setSelectedIndex] = useState(0)
+
+  // Handle Preview. When `editedCode` is provided ("Edit Before Approving"),
+  // it is sent as the replacement so the preview diff reflects the user's
+  // hand-edited code; the backend validates and persists it on success.
+  const handlePreview = async (item, resId, editedCode) => {
     if (!resId) return
     setItemAction(resId, { inFlight: 'preview', error: null })
     try {
@@ -159,6 +169,7 @@ function Suggestions() {
           repositoryRoot: item.repository,
           file: item.file,
           suggestionRevision: item.revision || 1,
+          ...(editedCode !== undefined ? { replacement: editedCode } : {}),
         }),
       })
       const payload = await resp.json()
@@ -167,8 +178,10 @@ function Suggestions() {
       }
       setResolutionsMap((prev) => ({ ...prev, [resId]: payload.data }))
       setItemAction(resId, { inFlight: null, diffOpen: true, error: null })
+      return true
     } catch (err) {
       setItemAction(resId, { inFlight: null, error: err.message })
+      return false
     }
   }
 
@@ -269,6 +282,66 @@ function Suggestions() {
     }
   }
 
+  // Keyboard triage for the suggestions page: j/k select, a = approve,
+  // p = toggle preview, Enter = apply. Shortcuts act on the currently selected
+  // card (selectedIndex), defaulting to the first actionable suggestion, and
+  // are suppressed while typing in a field (e.g. the edit sandbox textarea).
+  const actionable = suggestions
+    .map((item) => item)
+    .filter((item) => (item.resolutionId || '') && item.status !== 'failed')
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return
+      }
+      if (actionable.length === 0) return
+      const clamped = Math.min(selectedIndex, actionable.length - 1)
+      const item = actionable[clamped]
+      const resId = item.resolutionId
+      const resolution = resolutionsMap[resId] || null
+      const actions = actionState[resId] || {}
+
+      switch (event.key) {
+        case 'j':
+        case 'ArrowDown':
+          event.preventDefault()
+          setSelectedIndex((prev) => (prev + 1) % actionable.length)
+          break
+        case 'k':
+        case 'ArrowUp':
+          event.preventDefault()
+          setSelectedIndex((prev) => (prev - 1 + actionable.length) % actionable.length)
+          break
+        case 'a':
+          if (actions.inFlight) return
+          event.preventDefault()
+          handleApprove(item, resId)
+          break
+        case 'p':
+          if (actions.inFlight) return
+          event.preventDefault()
+          if (resolution?.previewDiff && actions.diffOpen) {
+            setItemAction(resId, { diffOpen: false })
+          } else {
+            handlePreview(item, resId)
+          }
+          break
+        case 'Enter':
+          if (actions.inFlight) return
+          event.preventDefault()
+          handleApply(item, resId)
+          break
+        default:
+          break
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   const hasPartialFailure = Boolean(meta && meta.failed > 0)
   const canRetry = Boolean(meta && (meta.retryable || hasPartialFailure))
   const providerUnavailable = Boolean(error && PROVIDER_ERROR_CODES.has(error.code))
@@ -340,6 +413,7 @@ function Suggestions() {
           {file
             ? `Review, preview diff, approve, and safely apply patches for ${file}.`
             : 'Review, preview diff, approve, and safely apply patches for merge collisions.'}
+          {' '}<span className="suggestions-shortcut-hint">Shortcuts: <kbd>j</kbd>/<kbd>k</kbd> select · <kbd>p</kbd> preview · <kbd>a</kbd> approve · <kbd>Enter</kbd> apply</span>
         </p>
         {globalError && (
           <div className="suggestions-state suggestions-state-error" role="alert" aria-live="assertive">
@@ -391,7 +465,6 @@ function Suggestions() {
         <div className="empty-state">No conflict suggestions available for this repository.</div>
       ) : (
         suggestions.map((item, index) => {
-          const confidence = item.resolution?.confidence_score ?? item.resolution?.confidence
           const verification = item.verification || item.resolution?.verification || resolutionsMap[item.resolutionId]?.verification
           const resId = item.resolutionId || ''
           const resolution = resolutionsMap[resId] || null
@@ -416,9 +489,6 @@ function Suggestions() {
             >
               <div className="ai-suggestion-title">
                 <div className="suggestion-meta">
-                  <div className="ai-suggestion-icon">
-                    <Sparkles size={20} />
-                  </div>
                   <div>
                     <h3>{item.file}</h3>
                     <p>
@@ -441,20 +511,11 @@ function Suggestions() {
                       className={`verification-badge ${verification.score < 70 ? 'verification-badge-warning' : ''}`}
                       title={`Deterministic verification score: ${verification.score}/100 (${verification.status || 'evaluated'})`}
                     >
-                      <ShieldCheck size={13} />
                       Verified: {verification.score}/100
                     </span>
                   ) : (
                     <span className="verification-badge" title="Deterministic AST syntax check passes without error nodes">
-                      <ShieldCheck size={13} />
                       Syntax Checked
-                    </span>
-                  )}
-
-                  {/* AI self-score: displayed as informational metadata only */}
-                  {confidence !== undefined && confidence !== null && (
-                    <span className="ai-suggestion-score" title="Self-reported model score (uncalibrated post-hoc value)">
-                      Model Score: {confidence}%
                     </span>
                   )}
 
@@ -536,8 +597,60 @@ function Suggestions() {
                     </div>
 
                     <div className="ai-suggestion-block">
-                      <strong>Proposed Resolution Code</strong>
-                      <pre>{item.resolution?.suggested_code || 'No suggested code available.'}</pre>
+                      <div className="suggestion-block-head">
+                        <strong>Proposed Resolution Code</strong>
+                        {!isApplied && !isReverted && !isStale && !isManualReview && (
+                          <button
+                            type="button"
+                            className="edit-toggle-btn"
+                            onClick={() => {
+                              const opening = !itemActions.editing
+                              setItemAction(resId, {
+                                editing: opening,
+                                draft: opening
+                                  ? (itemActions.draft ?? item.resolution?.suggested_code ?? '')
+                                  : itemActions.draft,
+                              })
+                            }}
+                          >
+                            <Pencil size={13} />
+                            {itemActions.editing ? 'Cancel Edit' : 'Edit Before Approving'}
+                          </button>
+                        )}
+                      </div>
+
+                      {itemActions.editing ? (
+                        <div className="resolution-edit-sandbox">
+                          <textarea
+                            className="resolution-edit-area"
+                            spellCheck={false}
+                            value={itemActions.draft ?? item.resolution?.suggested_code ?? ''}
+                            onChange={(e) => setItemAction(resId, { draft: e.target.value })}
+                            rows={Math.min(
+                              20,
+                              Math.max(6, (itemActions.draft ?? item.resolution?.suggested_code ?? '').split('\n').length + 1),
+                            )}
+                          />
+                          <div className="resolution-edit-actions">
+                            <button
+                              type="button"
+                              className="action-btn preview-btn"
+                              disabled={Boolean(inFlight)}
+                              onClick={async () => {
+                                const ok = await handlePreview(item, resId, itemActions.draft ?? '')
+                                if (ok) setItemAction(resId, { editing: false })
+                              }}
+                            >
+                              Preview Edited Patch
+                            </button>
+                            <span className="resolution-edit-hint">
+                              Your edit is syntax-checked and region-mapped exactly like AI output before it can be approved.
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <pre><Highlight code={item.resolution?.suggested_code || 'No suggested code available.'} language={languageForFile(item.file)} /></pre>
+                      )}
                     </div>
 
                     {verification?.findings?.length > 0 && (
@@ -598,7 +711,6 @@ function Suggestions() {
                       }
                     }}
                   >
-                    <Eye size={15} />
                     {inFlight === 'preview'
                       ? 'Generating Preview...'
                       : itemActions.diffOpen && resolution?.previewDiff
@@ -614,7 +726,6 @@ function Suggestions() {
                       disabled={Boolean(inFlight) || isApproved || isStale || isManualReview}
                       onClick={() => handleApprove(item, resId)}
                     >
-                      <Check size={15} />
                       {inFlight === 'approve'
                         ? 'Approving...'
                         : isApproved
@@ -632,7 +743,6 @@ function Suggestions() {
                       title={!isApproved ? 'Apply is disabled until explicit approval' : 'Apply patch atomically'}
                       onClick={() => handleApply(item, resId)}
                     >
-                      <ShieldCheck size={15} />
                       {inFlight === 'apply' ? 'Applying Atomically...' : 'Apply Patch'}
                     </button>
                   )}
@@ -678,7 +788,7 @@ function Suggestions() {
                   {/* REVERTED BADGE */}
                   {isReverted && (
                     <span className="reverted-notice">
-                      <Check size={14} /> Patch was safely rolled back to original content.
+                      <CheckCircle2 size={14} /> Patch was safely rolled back to original content.
                     </span>
                   )}
                 </div>

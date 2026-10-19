@@ -52,9 +52,12 @@ describe('Conflicts Tab', () => {
     expect(screen.getByText('Ours Version')).toBeInTheDocument()
     expect(screen.getByText('Theirs Version')).toBeInTheDocument()
 
-    expect(screen.getByText('def process_data(): return []')).toBeInTheDocument()
-    expect(screen.getByText('def process_data(): return [1, 2]')).toBeInTheDocument()
-    expect(screen.getByText('def process_data(): return [3, 4]')).toBeInTheDocument()
+    // Syntax highlighting splits code into token spans, so assert on the
+    // combined text content of the rendered panes rather than one node.
+    const bodyText = document.body.textContent
+    expect(bodyText).toContain('def process_data(): return []')
+    expect(bodyText).toContain('def process_data(): return [1, 2]')
+    expect(bodyText).toContain('def process_data(): return [3, 4]')
   })
 
   it('renders empty state when no conflicted files exist', async () => {

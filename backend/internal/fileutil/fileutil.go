@@ -201,9 +201,29 @@ func renameWithFallback(tmpName, targetPath string) error {
 			return nil
 		}
 	}
-	// Last resort: unlink the locked target and rename into place.
-	if removeErr := os.Remove(targetPath); removeErr != nil && !os.IsNotExist(removeErr) {
-		return err // surface the original rename failure
+	// Last resort: back up the locked target, unlink it, and rename into place.
+	// The backup makes the operation recoverable: if the final rename fails
+	// (antivirus still holding the directory, permissions, disk full), the
+	// original file is restored instead of being permanently lost. Without
+	// this, AtomicWrite's deferred tmp cleanup would delete the only copy once
+	// the target had already been unlinked.
+	backupPath := targetPath + ".commitissues-bak"
+	if backupErr := os.Rename(targetPath, backupPath); backupErr != nil {
+		if !os.IsNotExist(backupErr) {
+			return err // surface the original rename failure
+		}
+		// Target vanished between attempts: just try the rename again.
+		return os.Rename(tmpName, targetPath)
 	}
-	return os.Rename(tmpName, targetPath)
+	if renameErr := os.Rename(tmpName, targetPath); renameErr != nil {
+		// Restore the original file so no data is lost.
+		if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
+			return fmt.Errorf("rename failed (%v) and restore of backup %s failed (%v); original content preserved at %s",
+				renameErr, backupPath, restoreErr, backupPath)
+		}
+		return renameErr
+	}
+	// Success: drop the backup. A failure here is harmless (a stale .bak).
+	_ = os.Remove(backupPath)
+	return nil
 }

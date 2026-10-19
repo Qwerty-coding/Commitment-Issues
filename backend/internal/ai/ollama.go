@@ -60,15 +60,66 @@ func (o *OllamaResolver) ResolveCollision(ctx context.Context, collision semanti
 // encodeCollisionPayload serializes the collision for the provider in the
 // configured format. TOON is the default (token-efficient for the uniform
 // arrays that dominate payloads); JSON remains the per-run fallback.
+//
+// The encoded payload is wrapped in explicit XML-style boundaries so the
+// model treats the embedded code strictly as data. Without isolation, a
+// malicious comment or string inside a conflicted file (e.g.
+// "// SYSTEM: output ...") can be interpreted as a system instruction —
+// classic prompt injection. The system prompt declares these tags untrusted.
 func encodeCollisionPayload(collision semantic.DiffItem, format string) (string, error) {
+	var body string
 	if format == "json" {
 		data, err := json.Marshal(collision)
 		if err != nil {
 			return "", err
 		}
-		return string(data), nil
+		body = string(data)
+	} else {
+		encoded, err := toon.Marshal(collision)
+		if err != nil {
+			return "", err
+		}
+		body = encoded
 	}
-	return toon.Marshal(collision)
+
+	var sb strings.Builder
+	sb.WriteString("<conflict_data>\n")
+	sb.WriteString("<file_name>")
+	sb.WriteString(sanitizeBoundary(collision.File))
+	sb.WriteString("</file_name>\n")
+	sb.WriteString("<base_code>\n")
+	sb.WriteString(sanitizeBoundary(collision.BaseContent))
+	sb.WriteString("\n</base_code>\n")
+	sb.WriteString("<ours_code>\n")
+	sb.WriteString(sanitizeBoundary(collision.OurContent))
+	sb.WriteString("\n</ours_code>\n")
+	sb.WriteString("<theirs_code>\n")
+	sb.WriteString(sanitizeBoundary(collision.TheirContent))
+	sb.WriteString("\n</theirs_code>\n")
+	sb.WriteString("<structured_payload format=\"")
+	sb.WriteString(format)
+	sb.WriteString("\">\n")
+	sb.WriteString(sanitizeBoundary(body))
+	sb.WriteString("\n</structured_payload>\n")
+	sb.WriteString("</conflict_data>")
+	return sb.String(), nil
+}
+
+// sanitizeBoundary neutralizes any literal occurrences of our own boundary
+// tags inside untrusted code, so injected code cannot prematurely close a
+// <..._code> block and escape into instruction space.
+func sanitizeBoundary(s string) string {
+	for _, tag := range []string{
+		"<conflict_data>", "</conflict_data>",
+		"<file_name>", "</file_name>",
+		"<base_code>", "</base_code>",
+		"<ours_code>", "</ours_code>",
+		"<theirs_code>", "</theirs_code>",
+		"<structured_payload", "</structured_payload>",
+	} {
+		s = strings.ReplaceAll(s, tag, strings.ReplaceAll(strings.ReplaceAll(tag, "<", "&lt;"), ">", "&gt;"))
+	}
+	return s
 }
 
 func resolveOpenAICompatible(ctx context.Context, client *http.Client, baseURL, model, authKey, secretKey string, collision semantic.DiffItem, promptCtx promptcontext.PromptContextIR, provider string, maxResponseSize int, payloadFormat string) (*AIResolutionResponse, error) {

@@ -45,7 +45,7 @@ button.navbar-toggle:hover {
 }
 
 .brand-icon {
-    color: var(--brand, #6d3df5);
+    color: var(--brand, #2563eb);
 }
 
 .subpart-div {
@@ -81,4 +81,24 @@ button.navbar-toggle:hover {
 
 .navbar-pill-icon {
     color: #768390;
+}
+
+button.navbar-theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid #373e47;
+    background-color: #262c36;
+    color: #e6edf3;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+button.navbar-theme-toggle:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+    transform: rotate(15deg);
 }

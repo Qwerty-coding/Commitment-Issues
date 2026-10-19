@@ -78,7 +78,7 @@ func parseJSONResponse(rawText string) (*AIResolutionResponse, error) {
 	}
 	res := &AIResolutionResponse{
 		Explanation:   *wire.Explanation,
-		SuggestedCode: *wire.SuggestedCode,
+		SuggestedCode: cleanSuggestedCode(*wire.SuggestedCode),
 	}
 	if wire.ConfidenceScore != nil {
 		res.Confidence = *wire.ConfidenceScore
@@ -87,6 +87,24 @@ func parseJSONResponse(rawText string) (*AIResolutionResponse, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+// cleanSuggestedCode strips accidental markdown code block fences (e.g. ```go\n...```)
+// that LLMs often emit inside JSON fields.
+func cleanSuggestedCode(code string) string {
+	s := strings.TrimSpace(code)
+	if strings.HasPrefix(s, "```") {
+		if newlineIdx := strings.Index(s, "\n"); newlineIdx != -1 {
+			s = s[newlineIdx+1:]
+		} else {
+			s = strings.TrimPrefix(s, "```")
+		}
+		if idx := strings.LastIndex(s, "```"); idx != -1 {
+			s = s[:idx]
+		}
+		return strings.TrimRight(s, " \t\r\n")
+	}
+	return code
 }
 
 // ResolveCollisionWithRetry executes one collision resolution with the

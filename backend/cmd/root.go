@@ -8,8 +8,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "CommitIssues",
-	Short: "CommitIssues: AST-driven Git merge conflict analyzer and resolver",
+	Use:     "ci",
+	Aliases: []string{"CommitIssues", "commitissues", "commit-issues"},
+	Short:   "ci (CommitIssues): AST-driven Git merge conflict analyzer and resolver",
 	// Errors from subcommands are structured and deterministic; suppressing
 	// usage output keeps CLI failures readable and machine-parseable.
 	SilenceUsage:  true,

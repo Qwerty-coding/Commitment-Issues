@@ -389,7 +389,11 @@ func (n SemanticNode) callableKind() bool {
 func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 	result := SemanticGraph{Nodes: []SemanticNode{}, Edges: []SemanticEdge{}}
 	nodeByKey := make(map[string]SemanticNode)
-	funcByName := make(map[string]SemanticNode)
+	// funcByName indexes callable nodes by their lowercase bare name. Because
+	// methods like toString()/render()/close() exist in many classes, a bare
+	// name is ambiguous; we keep every candidate so edge resolution can be
+	// scope-aware instead of picking an arbitrary same-named method.
+	funcByName := make(map[string][]SemanticNode)
 
 	for _, fn := range ctx.Functions {
 		node := SemanticNode{
@@ -403,12 +407,10 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 		}
 		result.Nodes = append(result.Nodes, node)
 		nodeByKey[node.Identity] = node
-	if node.callableKind() {
-		nameKey := strings.ToLower(node.Name)
-		if existing, ok := funcByName[nameKey]; !ok || node.ID < existing.ID {
-			funcByName[nameKey] = node
+		if node.callableKind() {
+			nameKey := strings.ToLower(node.Name)
+			funcByName[nameKey] = append(funcByName[nameKey], node)
 		}
-	}
 	}
 
 	for _, v := range ctx.Variables {
@@ -424,18 +426,33 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 		nodeByKey[node.Identity] = node
 	}
 
+	// scopeByNodeID maps a callable node's ID to the scope it was declared in
+	// (its enclosing class/namespace/file), so call resolution can prefer a
+	// callee in the SAME scope over an unrelated same-named method elsewhere.
+	scopeByNodeID := make(map[string]string, len(ctx.Functions))
+	for _, fn := range ctx.Functions {
+		scopeByNodeID[semanticNodeIDFor(fn)] = strings.ToLower(fn.Scope)
+	}
+
 	edgeSeen := make(map[string]struct{})
 	for _, fn := range ctx.Functions {
 		if !callableKind(fn.Kind) {
 			continue
 		}
 		sourceID := semanticNodeIDFor(fn)
+		callerScope := strings.ToLower(fn.Scope)
 		for _, callName := range fn.Calls {
-			targetNode, ok := funcByName[strings.ToLower(callName)]
-			if !ok {
+			candidates := funcByName[strings.ToLower(callName)]
+			if len(candidates) == 0 {
 				continue
 			}
-			edgeID := fmt.Sprintf("%s__CALLS__%s", sourceID, targetNode.ID)
+			target, ok := resolveCallTarget(candidates, callerScope, scopeByNodeID)
+			if !ok {
+				// Ambiguous bare name with no same-scope match: skip rather than
+				// draw a false edge between unrelated classes.
+				continue
+			}
+			edgeID := fmt.Sprintf("%s__CALLS__%s", sourceID, target.ID)
 			if _, exists := edgeSeen[edgeID]; exists {
 				continue
 			}
@@ -443,7 +460,7 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 			result.Edges = append(result.Edges, SemanticEdge{
 				ID:     edgeID,
 				Source: sourceID,
-				Target: targetNode.ID,
+				Target: target.ID,
 				Type:   "CALLS",
 			})
 		}
@@ -454,6 +471,30 @@ func BuildSemanticGraph(ctx parser.ASTContext) SemanticGraph {
 	sortSemanticGraph(&result)
 
 	return result
+}
+
+// resolveCallTarget picks the best callee for a call made from callerScope.
+// Resolution order:
+//  1. exactly one candidate in the SAME scope as the caller (the common case:
+//     a method calling another method of its own class);
+//  2. exactly one candidate overall (unambiguous global function);
+//  3. otherwise the call is ambiguous and no edge is drawn — matching a bare
+//     method name like toString() to an arbitrary unrelated class would be a
+//     false structural edge.
+func resolveCallTarget(candidates []SemanticNode, callerScope string, scopeByNodeID map[string]string) (SemanticNode, bool) {
+	var sameScope []SemanticNode
+	for _, c := range candidates {
+		if scopeByNodeID[c.ID] == callerScope {
+			sameScope = append(sameScope, c)
+		}
+	}
+	if len(sameScope) == 1 {
+		return sameScope[0], true
+	}
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	return SemanticNode{}, false
 }
 
 func MergeSemanticGraphs(graphs ...SemanticGraph) SemanticGraph {

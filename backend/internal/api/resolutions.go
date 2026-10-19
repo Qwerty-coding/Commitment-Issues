@@ -20,12 +20,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	ai "CommitIssues/internal/ai"
 	"CommitIssues/internal/apply"
 	"CommitIssues/internal/engine"
+	"CommitIssues/internal/git"
 	"CommitIssues/internal/parser"
 	"CommitIssues/internal/patch"
 	"CommitIssues/internal/resolutions"
@@ -47,6 +49,12 @@ type mutationRequest struct {
 	SuggestionRevision int `json:"suggestionRevision"`
 	// ExpectedContentHash, when non-empty, must match the working-tree hash.
 	ExpectedContentHash string `json:"expectedContentHash,omitempty"`
+	// Replacement, when non-empty on /preview, overrides the stored AI
+	// replacement with the user's hand-edited code before the diff is built.
+	// This powers the "Edit Before Approving" sandbox: the developer can fix a
+	// typo or add a parameter without rejecting the whole suggestion. The
+	// edited code is validated by the same syntax/mapping checks as AI output.
+	Replacement string `json:"replacement,omitempty"`
 }
 
 // resolutionResponse wraps a single resolution for API responses.
@@ -388,14 +396,23 @@ func handlePreview(w http.ResponseWriter, r *http.Request, run *runstate.Run, re
 		return
 	}
 
-	// Build the preview (read-only, never writes to disk).
-	previewResult, buildErr := patch.Build(analysis, res, wtCheck.CurrentData)
+	// Build the preview (read-only, never writes to disk). When the caller
+	// supplies an edited replacement ("Edit Before Approving"), apply it to a
+	// copy of the resolution so the diff reflects the user's code. The edit is
+	// validated by patch.Build exactly like AI output (syntax + region mapping)
+	// and only persisted if the build succeeds.
+	buildRes := res
+	if req.Replacement != "" {
+		buildRes.Replacement = req.Replacement
+	}
+	previewResult, buildErr := patch.Build(analysis, buildRes, wtCheck.CurrentData)
 	if buildErr != nil {
 		writeResolutionError(w, buildErr)
 		return
 	}
 
-	// Update the resolution.
+	// Update the resolution (including any accepted edit).
+	res.Replacement = buildRes.Replacement
 	res.Status = resolutions.StatusPreviewed
 	res.PreviewDiff = previewResult.UnifiedDiff
 	res = run.SaveResolution(res)
@@ -664,18 +681,64 @@ func handleAnalysisRefresh(mux *http.ServeMux, run *runstate.Run) {
 			writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 			return
 		}
-		if req.RepositoryRoot == "" || req.File == "" {
-			writeError(w, http.StatusBadRequest, "BAD_REQUEST",
-				"repositoryRoot and file are required")
-			return
+		// Fallback chain for repositoryRoot: the request body, then the
+		// Fallback chain for repositoryRoot: the request body, then the
+		// repository of the stored analysis for this file, then the run's
+		// configured repository. The frontend often navigates with only
+		// ?file=<path> (item.repository can be empty), so a bare file must
+		// still be refreshable rather than failing with 400.
+		if req.RepositoryRoot == "" {
+			if req.File != "" {
+				if analysis, ok := run.FindAnalysis(req.File); ok && analysis.Repository != "" {
+					req.RepositoryRoot = analysis.Repository
+				}
+			}
+			if req.RepositoryRoot == "" {
+				if meta := run.GetRepositoryMetadata(); meta.Path != "" {
+					req.RepositoryRoot = meta.Path
+				} else {
+					req.RepositoryRoot = "."
+				}
+			}
 		}
 
-		// Mark all resolutions for this file as stale, capturing real previous status.
 		absRepo, err := safeguard.VerifyRepository(req.RepositoryRoot)
 		if err != nil {
 			writeResolutionError(w, err)
 			return
 		}
+
+		// If file is empty, perform a full workspace / repository refresh.
+		if req.File == "" {
+			conflictsByRepo, repoRoots, scanErr := engine.FindConflicts(r.Context(), absRepo)
+			if scanErr != nil {
+				writeError(w, http.StatusInternalServerError, "SCAN_ERROR", scanErr.Error())
+				return
+			}
+			if len(repoRoots) > 0 {
+				root := repoRoots[0]
+				run.SetRepositoryMetadata(runstate.RepositoryMetadata{
+					Name:           filepath.Base(root),
+					CurrentBranch:  git.CurrentBranch(root),
+					IncomingBranch: git.IncomingBranch(root),
+					Path:           root,
+				})
+			}
+			cfg := engine.DefaultConfig()
+			for _, rRoot := range repoRoots {
+				conflicts := conflictsByRepo[rRoot]
+				if len(conflicts) > 0 {
+					_, _ = engine.ProcessRepository(r.Context(), run, rRoot, conflicts, cfg, false)
+				}
+			}
+			writeJSON(w, http.StatusOK, struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}{Success: true, Message: "workspace analysis refreshed"})
+			return
+		}
+
+		// Mark all resolutions for this file as stale, capturing real previous status.
 		for _, res := range run.ResolutionsFor(absRepo, req.File) {
 			if res.Status == resolutions.StatusProposed ||
 				res.Status == resolutions.StatusPreviewed ||

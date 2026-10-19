@@ -1,0 +1,558 @@
+/*
+ * Dark-theme overrides.
+ *
+ * This file maps all surfaces, cards, text contrast, and interactive elements
+ * under [data-theme='dark'] using global design tokens (--card-bg, --code-bg,
+ * --text-primary, --text-secondary, --card-border, --brand-soft, etc.).
+ */
+
+:root[data-theme='dark'] body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* ── Generic page chrome and headings ─────────────────────────────────────── */
+:root[data-theme='dark'] .conflicts-page,
+:root[data-theme='dark'] .suggestions-page,
+:root[data-theme='dark'] .compare-page,
+:root[data-theme='dark'] .treediff-page,
+:root[data-theme='dark'] .dashboard-page,
+:root[data-theme='dark'] .history-page,
+:root[data-theme='dark'] .aicontext-page,
+:root[data-theme='dark'] .commitgraph-page,
+:root[data-theme='dark'] .graph-page {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] h1,
+:root[data-theme='dark'] h2,
+:root[data-theme='dark'] h3,
+:root[data-theme='dark'] h4,
+:root[data-theme='dark'] h5 {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .welcome-section p,
+:root[data-theme='dark'] .conflicts-subtitle,
+:root[data-theme='dark'] .compare-subtitle,
+:root[data-theme='dark'] .suggestions-header p,
+:root[data-theme='dark'] .history-subtitle,
+:root[data-theme='dark'] .aicontext-subtitle,
+:root[data-theme='dark'] .commitgraph-header p {
+  color: var(--text-secondary);
+}
+
+/* ── Cards and main surfaces ─────────────────────────────────────────────── */
+:root[data-theme='dark'] .repository-card,
+:root[data-theme='dark'] .summary-card,
+:root[data-theme='dark'] .analysis-card,
+:root[data-theme='dark'] .graph-card,
+:root[data-theme='dark'] .file-diff-card,
+:root[data-theme='dark'] .compare-form,
+:root[data-theme='dark'] .compare-state,
+:root[data-theme='dark'] .compare-meta,
+:root[data-theme='dark'] .compare-file,
+:root[data-theme='dark'] .compare-summary-card,
+:root[data-theme='dark'] .conflict-list,
+:root[data-theme='dark'] .conflict-detail,
+:root[data-theme='dark'] .conflict-list-item,
+:root[data-theme='dark'] .empty-conflicts-box,
+:root[data-theme='dark'] .history-card,
+:root[data-theme='dark'] .history-empty,
+:root[data-theme='dark'] .ast-section,
+:root[data-theme='dark'] .aicontext-card,
+:root[data-theme='dark'] .aicontext-empty,
+:root[data-theme='dark'] .aicontext-detail,
+:root[data-theme='dark'] .empty-state,
+:root[data-theme='dark'] .edge-list-card,
+:root[data-theme='dark'] .no-graph {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+/* Form inputs */
+:root[data-theme='dark'] .compare-field input,
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select,
+:root[data-theme='dark'] textarea {
+  background: var(--code-bg);
+  color: var(--text-primary);
+  border-color: var(--card-border);
+}
+
+/* ── Code / pre blocks ──────────────────────────────────────────────────── */
+:root[data-theme='dark'] pre,
+:root[data-theme='dark'] code,
+:root[data-theme='dark'] .code-pane pre,
+:root[data-theme='dark'] .ai-suggestion-block pre,
+:root[data-theme='dark'] .patch-diff-view {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .code-pane {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+}
+
+/* ── Dashboard specifics ─────────────────────────────────────────────────── */
+:root[data-theme='dark'] .current-branch {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .main-branch {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+}
+
+:root[data-theme='dark'] .branch-arrow {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .repository-divider {
+  background: var(--card-border);
+}
+
+:root[data-theme='dark'] .workspace-text {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .workspace-text i {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .analysis-counts {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .preview-row {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .preview-row strong {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .preview-row span {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .preview-side em {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .preview-side pre {
+  background: #0d1117;
+  color: var(--text-primary);
+  border: 1px solid var(--card-border);
+}
+
+/* ── AST & Dependency Graph (Fixes weird box issue) ─────────────────────── */
+:root[data-theme='dark'] .commitgraph-page .tree-node,
+:root[data-theme='dark'] .tree-view .tree-node {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme='dark'] .tree-label,
+:root[data-theme='dark'] .tree-leaf {
+  background: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+  color: var(--text-primary) !important;
+}
+
+:root[data-theme='dark'] .tree-node::after {
+  background: var(--card-border) !important;
+}
+
+:root[data-theme='dark'] .node-title {
+  color: var(--text-primary) !important;
+}
+
+:root[data-theme='dark'] .tree-leaf strong {
+  color: var(--text-secondary) !important;
+}
+
+:root[data-theme='dark'] .node-kind-tag {
+  background: rgba(109, 61, 245, 0.2);
+  color: #d2a8ff;
+}
+
+:root[data-theme='dark'] .node-status-badge {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .edge-item {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .edge-arrow {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .edge-type-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+:root[data-theme='dark'] .node-focus-btn {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .node-focus-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand);
+}
+
+:root[data-theme='dark'] .node-focus-btn.active {
+  background: var(--brand);
+  color: #ffffff;
+  border-color: var(--brand);
+}
+
+:root[data-theme='dark'] .focus-banner {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .focus-banner button {
+  background: var(--card-bg);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* ── Suggestions & Resolution Cards (Fixes white-card / hidden text) ───── */
+:root[data-theme='dark'] .ai-suggestion-card,
+:root[data-theme='dark'] .ai-suggestion-card-applied,
+:root[data-theme='dark'] .ai-suggestion-card-approved,
+:root[data-theme='dark'] .ai-suggestion-card-stale,
+:root[data-theme='dark'] .ai-suggestion-card-reverted {
+  background: var(--card-bg) !important;
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .ai-suggestion-card-applied {
+  border-color: #238636 !important;
+}
+
+:root[data-theme='dark'] .ai-suggestion-card-approved {
+  border-color: #1f6feb !important;
+}
+
+:root[data-theme='dark'] .ai-suggestion-card-stale {
+  border-color: #9e6a03 !important;
+}
+
+:root[data-theme='dark'] .ai-suggestion-card-failed {
+  border-color: #da3633 !important;
+}
+
+:root[data-theme='dark'] .ai-suggestion-card-reverted {
+  border-color: var(--card-border) !important;
+}
+
+:root[data-theme='dark'] .ai-suggestion-content {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .ai-suggestion-content p {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .ai-suggestion-block strong {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .ai-suggestion-title h3 {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .ai-suggestion-title p {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .ai-suggestion-score {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .suggestion-provenance {
+  color: var(--text-muted) !important;
+}
+
+:root[data-theme='dark'] .suggestions-chip {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .suggestions-chip-warning {
+  background: rgba(210, 153, 34, 0.2);
+  color: #e3b341;
+}
+
+:root[data-theme='dark'] .suggestions-chip-error {
+  background: rgba(248, 81, 73, 0.2);
+  color: #f85149;
+}
+
+:root[data-theme='dark'] .stale-warning-banner {
+  background: rgba(210, 153, 34, 0.15);
+  border-color: rgba(210, 153, 34, 0.4);
+  color: #e3b341;
+}
+
+:root[data-theme='dark'] .suggestions-partial {
+  background: rgba(210, 153, 34, 0.15);
+  border-color: rgba(210, 153, 34, 0.4);
+  color: #e3b341;
+}
+
+:root[data-theme='dark'] .suggestions-partial strong,
+:root[data-theme='dark'] .suggestions-partial code {
+  color: #f0883e;
+}
+
+:root[data-theme='dark'] .resolution-error-banner {
+  background: rgba(248, 81, 73, 0.15);
+  border-color: rgba(248, 81, 73, 0.4);
+  color: #ff7b72;
+}
+
+:root[data-theme='dark'] .suggestions-state {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .suggestions-state-warning {
+  border-color: rgba(210, 153, 34, 0.4);
+  background: rgba(210, 153, 34, 0.1);
+}
+
+:root[data-theme='dark'] .suggestions-state-error {
+  border-color: rgba(248, 81, 73, 0.4);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+:root[data-theme='dark'] .preview-btn {
+  background: var(--card-bg);
+  color: var(--text-primary);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .preview-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme='dark'] .approve-btn {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+  border-color: rgba(56, 139, 253, 0.4);
+}
+
+:root[data-theme='dark'] .approve-btn:hover:not(:disabled) {
+  background: rgba(56, 139, 253, 0.25);
+}
+
+:root[data-theme='dark'] .revert-cancel-btn {
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .resolution-action-toolbar {
+  border-color: var(--card-border);
+}
+
+/* ── Conflicts view ──────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .conflict-file-name {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .conflict-list-item.active,
+:root[data-theme='dark'] .conflict-list-item:hover {
+  background-color: var(--brand-soft) !important;
+  border-color: var(--brand) !important;
+}
+
+:root[data-theme='dark'] .conflict-summary {
+  color: var(--text-secondary);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .change-item {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .change-item-header {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .change-item-title {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .change-item-meta {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .base-pane .pane-tag {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .ours-pane .pane-tag {
+  background: rgba(46, 160, 67, 0.2);
+  color: #7ee787;
+}
+
+:root[data-theme='dark'] .theirs-pane .pane-tag {
+  background: rgba(163, 113, 247, 0.2);
+  color: #d2a8ff;
+}
+
+/* ── Compare tab ─────────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .compare-field span {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .compare-summary-card strong {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .compare-summary-card span {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .compare-file-head h3 {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .compare-file-oldpath {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .compare-refs span {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .compare-status {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+/* ── TreeDiff tab ────────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .file-diff-header p {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .file-stats span {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .ast-tree {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .tree-root {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .treediff-page .tree-node {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+/* ── AI Context tab ──────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .aicontext-list-item.active,
+:root[data-theme='dark'] .aicontext-list-item:hover {
+  background-color: var(--brand-soft) !important;
+  border-color: var(--brand) !important;
+}
+
+:root[data-theme='dark'] .aicontext-stats {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .aicontext-readme {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .aicontext-readme-note {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .aicontext-readme-body {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .aicontext-filelist {
+  color: var(--text-primary);
+}
+
+/* ── History tab ─────────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .history-card h3 {
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .history-card p {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .history-card .metric {
+  background: var(--code-bg);
+  border-color: var(--card-border);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .history-provider {
+  color: var(--brand);
+}
+
+:root[data-theme='dark'] .history-errors,
+:root[data-theme='dark'] .history-error {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────────── */
+:root[data-theme='dark'] .sidebar {
+  background: #161b22;
+  border-color: var(--card-border);
+}
+
+:root[data-theme='dark'] .sidebar a,
+:root[data-theme='dark'] .sidebar-link {
+  color: var(--text-secondary);
+}
+
+:root[data-theme='dark'] .sidebar a:hover,
+:root[data-theme='dark'] .sidebar a.active,
+:root[data-theme='dark'] .sidebar-link:hover,
+:root[data-theme='dark'] .sidebar-link.active {
+  background: var(--brand-soft);
+  color: var(--text-primary);
+}

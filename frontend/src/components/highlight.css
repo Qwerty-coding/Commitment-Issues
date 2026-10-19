@@ -1,0 +1,36 @@
+/* Token colours for the lightweight syntax highlighter (components/Highlight).
+   Tuned for both themes: the hues stay legible on light and dark surfaces. */
+
+.tok-comment {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.tok-string {
+  color: #0a7b34;
+}
+
+.tok-number {
+  color: #b45309;
+}
+
+.tok-keyword {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] .tok-comment {
+  color: #8b949e;
+}
+
+:root[data-theme='dark'] .tok-string {
+  color: #7ee787;
+}
+
+:root[data-theme='dark'] .tok-number {
+  color: #ffa657;
+}
+
+:root[data-theme='dark'] .tok-keyword {
+  color: #d2a8ff;
+}

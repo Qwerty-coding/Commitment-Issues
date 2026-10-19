@@ -26,7 +26,13 @@ import (
 	"CommitIssues/internal/resolutions"
 	semantic "CommitIssues/internal/semantic"
 	"CommitIssues/internal/validation"
+	verification "CommitIssues/internal/verification"
 )
+
+// DefaultMaxResolutionEvents bounds the retained per-run audit event log so
+// long-running servers cannot grow memory without limit. Resolution events
+// are diagnostics; older entries beyond this cap are evicted oldest-first.
+const DefaultMaxResolutionEvents = 5000
 
 // FileKey builds the repository-safe key used for every per-file collection.
 // When no repository is known (legacy callers/tests) it degrades to the plain
@@ -82,6 +88,8 @@ type Suggestion struct {
 	Retryable bool `json:"retryable,omitempty"`
 	// ErrorMessage carries a redacted, human-readable failure summary.
 	ErrorMessage string `json:"errorMessage,omitempty"`
+	// Verification holds the deterministic local verification score and findings.
+	Verification *verification.Result `json:"verification,omitempty"`
 	// StartedAt/CompletedAt bound the generation attempt (UTC).
 	StartedAt   time.Time `json:"startedAt,omitempty"`
 	CompletedAt time.Time `json:"completedAt,omitempty"`
@@ -112,6 +120,10 @@ type RepositoryMetadata struct {
 	Name           string `json:"name"`
 	CurrentBranch  string `json:"currentBranch"`
 	IncomingBranch string `json:"incomingBranch"`
+	// Path is the repository root the run was started against. It lets
+	// repository-relative endpoints (e.g. /api/git/branches) default to the
+	// analysed repository instead of the server process's cwd.
+	Path string `json:"path,omitempty"`
 }
 
 // Run owns the isolated state for one analysis run.
@@ -130,6 +142,10 @@ type Run struct {
 	resolutionEvents   []resolutions.ResolutionEvent
 	resolutionInFlight map[string]struct{}
 	eventSeq           int64
+	// resolutionEventLimit caps the retained audit log; <=0 uses
+	// DefaultMaxResolutionEvents. Prevents unbounded growth on long-lived
+	// servers handling many merges/branch switches.
+	resolutionEventLimit int
 	repositoryMD       RepositoryMetadata
 	validationCfg      *validation.Config
 	// readmes stores the per-repository README excerpt keyed by repoRoot.

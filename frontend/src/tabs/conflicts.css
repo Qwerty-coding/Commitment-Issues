@@ -78,8 +78,8 @@
 
 .conflict-list-item.active,
 .conflict-list-item:hover {
-  border-color: #6842d9;
-  background-color: #f5f3ff;
+  border-color: var(--brand, #2563eb);
+  background-color: var(--brand-soft, #eff6ff);
 }
 
 .conflict-detail {
@@ -112,7 +112,7 @@
   padding: 8px 16px;
   border: none;
   border-radius: 8px;
-  background: #6842d9;
+  background: var(--brand, #2563eb);
   color: white;
   font-size: 13px;
   font-weight: 500;
@@ -121,7 +121,7 @@
 }
 
 .conflict-detail-actions button:hover {
-  background: #5b36bf;
+  background: #1d4ed8;
 }
 
 .conflict-summary {

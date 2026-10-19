@@ -253,9 +253,10 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 	files := make([]string, 0, len(unmerged))
 	seen := make(map[string]bool, len(unmerged))
 	for file := range unmerged {
-		if !seen[file] {
-			files = append(files, file)
-			seen[file] = true
+		slashFile := filepath.ToSlash(file)
+		if !seen[slashFile] {
+			files = append(files, slashFile)
+			seen[slashFile] = true
 		}
 	}
 
@@ -280,7 +281,8 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 		if relErr != nil {
 			return relErr
 		}
-		if seen[rel] {
+		slashRel := filepath.ToSlash(rel)
+		if seen[slashRel] {
 			return nil
 		}
 
@@ -317,8 +319,8 @@ func GetConflictedFiles(ctx context.Context, repoDir string) ([]string, error) {
 			return ctxErr
 		}
 		if result := ParseConflictRegions(string(prefix[:n])); len(result.Regions) > 0 {
-			files = append(files, rel)
-			seen[rel] = true
+			files = append(files, slashRel)
+			seen[slashRel] = true
 		}
 		return nil
 	})
@@ -397,8 +399,12 @@ func IncomingBranch(repoDir string) string {
 		return name
 	}
 	// Worktrees keep MERGE_MSG in the linked git dir; the rev-parse fallback
-	// resolves it there.
-	if out, err := exec.Command("git", "rev-parse", "--git-dir").Output(); err == nil {
+	// resolves it there. cmd.Dir MUST be the target repository: without it,
+	// git rev-parse runs in the server process's cwd and inspects the wrong
+	// .git (e.g. Commitment-Issues' own) when serving an external repo.
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	cmd.Dir = repoDir
+	if out, err := cmd.Output(); err == nil {
 		gitDir := strings.TrimSpace(string(out))
 		if gitDir != "" && !filepath.IsAbs(gitDir) {
 			gitDir = filepath.Join(repoDir, gitDir)

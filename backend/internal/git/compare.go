@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -236,4 +237,103 @@ func DetectRenames(ctx context.Context, repoRoot, commit1, commit2 string) ([]Re
 		}
 	}
 	return renames, nil
+}
+// GitRef is one selectable reference in a repository, surfaced to the compare
+// tab's autocomplete so users never have to type a hash from memory.
+type GitRef struct {
+	// Name is the ref's short name (e.g. "main", "v1.2.0", "origin/main").
+	Name string `json:"name"`
+	// Type is one of "branch", "remote", "tag" or "head".
+	Type string `json:"type"`
+	// Commit is the resolved short SHA the ref currently points at.
+	Commit string `json:"commit,omitempty"`
+}
+
+// ListRefs returns the repository's branches, remote branches and tags in a
+// deterministic order, each with the short SHA it resolves to. It never
+// mutates the repository. A non-git directory yields an empty list and no
+// error so the API can degrade gracefully.
+func ListRefs(ctx context.Context, repoRoot string) ([]GitRef, error) {
+	refs := make([]GitRef, 0)
+
+	// Local branches: "refs/heads/<name>".
+	branches, err := listRefsByPrefix(ctx, repoRoot, "refs/heads", "branch")
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, branches...)
+
+	// Remote-tracking branches: "refs/remotes/<name>" (skips the symbolic
+	// "<remote>/HEAD" entries git creates automatically).
+	remotes, err := listRefsByPrefix(ctx, repoRoot, "refs/remotes", "remote")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range remotes {
+		if strings.HasSuffix(r.Name, "/HEAD") {
+			continue
+		}
+		refs = append(refs, r)
+	}
+
+	// Tags: "refs/tags/<name>".
+	tags, err := listRefsByPrefix(ctx, repoRoot, "refs/tags", "tag")
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, tags...)
+
+	// The current HEAD as a convenience entry (detached HEAD included).
+	if head, err := ResolveRef(ctx, repoRoot, "HEAD"); err == nil && head != "" {
+		refs = append([]GitRef{{Name: "HEAD", Type: "head", Commit: shortSHA(head)}}, refs...)
+	}
+
+	sort.SliceStable(refs, func(i, j int) bool {
+		if refs[i].Type != refs[j].Type {
+			return refs[i].Type < refs[j].Type
+		}
+		return refs[i].Name < refs[j].Name
+	})
+	return refs, nil
+}
+
+// listRefsByPrefix enumerates refs under a full ref prefix and resolves each
+// to its commit SHA.
+func listRefsByPrefix(ctx context.Context, repoRoot, prefix, kind string) ([]GitRef, error) {
+	cmd := exec.CommandContext(ctx, "git", "for-each-ref", "--format=%(refname:short) %(objectname)", prefix)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		// A repository with no refs of this kind is not an error.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("git for-each-ref %s failed in %s: %w", prefix, repoRoot, err)
+	}
+
+	var refs []GitRef
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		refs = append(refs, GitRef{Name: parts[0], Type: kind, Commit: shortSHA(parts[1])})
+	}
+	return refs, nil
+}
+
+// shortSHA abbreviates a 40-character SHA to 12 characters for display.
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }

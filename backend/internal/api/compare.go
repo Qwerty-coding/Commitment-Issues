@@ -2,10 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"CommitIssues/internal/compare"
+	promptcontext "CommitIssues/internal/context"
 	"CommitIssues/internal/runstate"
 )
 
@@ -14,8 +17,30 @@ type compareRequest struct {
 	BaseRef        string `json:"baseRef,omitempty"`
 	OursRef        string `json:"oursRef"`
 	TheirsRef      string `json:"theirsRef"`
+	Activate       bool   `json:"activate,omitempty"`
 }
 
+func applyComparisonToRun(run *runstate.Run, repo string, oursRef, theirsRef string, result *compare.Result) {
+	if run == nil || result == nil {
+		return
+	}
+	run.SetRepositoryMetadata(runstate.RepositoryMetadata{
+		Name:           filepath.Base(repo),
+		CurrentBranch:  oursRef,
+		IncomingBranch: theirsRef,
+		Path:           repo,
+	})
+	for _, file := range result.Files {
+		var fa promptcontext.FileAnalysis
+		fa.File = file.Path
+		fa.Repository = repo
+		fa.RepositorySummary = fmt.Sprintf("Comparing %s ↔ %s: %s", oursRef, theirsRef, file.Status)
+		if file.SmartDiff != nil {
+			fa.SmartDiff = *file.SmartDiff
+		}
+		run.RegisterAnalysis(repo, fa)
+	}
+}
 
 func registerCompareHandlers(mux *http.ServeMux, run *runstate.Run) {
 	mux.HandleFunc("/api/compare", func(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +54,7 @@ func registerCompareHandlers(mux *http.ServeMux, run *runstate.Run) {
 
 		var opts compare.Options
 		defaultRepo := "."
+		activate := false
 
 		switch r.Method {
 		case http.MethodGet:
@@ -52,6 +78,9 @@ func registerCompareHandlers(mux *http.ServeMux, run *runstate.Run) {
 			if theirs == "" {
 				theirs = q.Get("theirsRef")
 			}
+			if q.Get("activate") == "true" || q.Get("activate") == "1" {
+				activate = true
+			}
 
 			opts = compare.Options{
 				Repo1:     repo,
@@ -70,13 +99,13 @@ func registerCompareHandlers(mux *http.ServeMux, run *runstate.Run) {
 			if repo == "" {
 				repo = defaultRepo
 			}
+			activate = req.Activate
 			opts = compare.Options{
 				Repo1:     repo,
 				BaseRef:   req.BaseRef,
 				OursRef:   req.OursRef,
 				TheirsRef: req.TheirsRef,
 			}
-
 
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET, POST /api/compare")
@@ -103,6 +132,9 @@ func registerCompareHandlers(mux *http.ServeMux, run *runstate.Run) {
 			return
 		}
 
+		if activate {
+			applyComparisonToRun(run, opts.Repo1, opts.OursRef, opts.TheirsRef, result)
+		}
 
 		writeJSON(w, http.StatusOK, struct {
 			Success bool            `json:"success"`

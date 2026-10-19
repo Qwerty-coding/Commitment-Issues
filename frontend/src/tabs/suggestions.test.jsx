@@ -67,7 +67,7 @@ afterEach(() => {
 })
 
 describe('Suggestions Tab', () => {
-  it('renders suggestion details, deterministic verification badge, and uncalibrated model score', async () => {
+  it('renders suggestion details and deterministic verification badge', async () => {
     render(
       <MemoryRouter>
         <Suggestions />
@@ -79,9 +79,6 @@ describe('Suggestions Tab', () => {
 
     // Check deterministic verification badge
     expect(screen.getByText('Syntax Checked')).toBeInTheDocument()
-
-    // Check model score is explicitly labeled as Model Score (not blind ground-truth confidence)
-    expect(screen.getByText(/Model Score: 88%/i)).toBeInTheDocument()
     expect(screen.getByText(/Unified both addition and multiplication/i)).toBeInTheDocument()
   })
 

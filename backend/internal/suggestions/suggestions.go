@@ -363,6 +363,7 @@ func (g *Generator) resolveOne(ctx context.Context, run *runstate.Run, resolver 
 	// Local deterministic verification replaces the (deprecated) AI
 	// self-reported confidence gating per docs/design_decisions.md.
 	verificationRes := verification.Evaluate(analysis.File, res.SuggestedCode, region)
+	item.Verification = &verificationRes
 	if verificationRes.Status == verification.StatusNeedsReview {
 		item.Status = runstate.StatusManualReview
 	}

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE, fetchJson, isAbort } from '../lib/api'
-import { AlertTriangle, GitCompare, Sparkles, FileText, CheckCircle2 } from 'lucide-react'
+import Highlight from '../components/Highlight'
+import { languageForFile } from '../lib/highlightLang'
+import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import './conflicts.css'
 
 function Conflicts() {
@@ -9,6 +11,7 @@ function Conflicts() {
   const [selectedFile, setSelectedFile] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [reloadKey, setReloadKey] = useState(0)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -19,7 +22,7 @@ function Conflicts() {
         const data = payload.data || []
         setAnalyses(data)
         if (data.length > 0) {
-          setSelectedFile(data[0].file)
+          setSelectedFile((prev) => (prev && data.some((a) => a.file === prev) ? prev : data[0].file))
         }
       })
       .catch((err) => {
@@ -32,9 +35,58 @@ function Conflicts() {
       })
 
     return () => controller.abort()
+  }, [reloadKey])
+
+  useEffect(() => {
+    const onRefresh = () => setReloadKey((k) => k + 1)
+    window.addEventListener('ci:refresh-analysis', onRefresh)
+    return () => window.removeEventListener('ci:refresh-analysis', onRefresh)
   }, [])
 
+  const handleRefresh = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await fetchJson(`${API_BASE}/api/analysis/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repositoryRoot: '.', file: '' }),
+      })
+      setReloadKey((k) => k + 1)
+    } catch (err) {
+      setError(err.message)
+      setLoading(false)
+    }
+  }
+
+  // Keyboard triage: j / ArrowDown selects the next conflict file, k /
+  // ArrowUp the previous. Shortcuts are ignored while the user is typing in
+  // an input, textarea or contenteditable so they never hijack typing.
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return
+      }
+      if (event.key !== 'j' && event.key !== 'k' && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+        return
+      }
+      if (analyses.length === 0) return
+      event.preventDefault()
+      const currentIndex = analyses.findIndex((a) => a.file === selectedFile)
+      const forward = event.key === 'j' || event.key === 'ArrowDown'
+      let nextIndex = forward ? currentIndex + 1 : currentIndex - 1
+      if (nextIndex < 0) nextIndex = analyses.length - 1
+      if (nextIndex >= analyses.length) nextIndex = 0
+      setSelectedFile(analyses[nextIndex].file)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [analyses, selectedFile])
+
   const selectedAnalysis = analyses.find((analysis) => analysis.file === selectedFile)
+  const selectedLanguage = languageForFile(selectedFile)
 
   const renderChanges = (title, items) => {
     if (!items || items.length === 0) {
@@ -60,19 +112,19 @@ function Conflicts() {
                 {item.base_content && (
                   <div className="code-pane base-pane">
                     <div className="pane-tag">Base Version</div>
-                    <pre><code>{item.base_content}</code></pre>
+                    <pre><Highlight code={item.base_content} language={selectedLanguage} /></pre>
                   </div>
                 )}
                 {item.our_content && (
                   <div className="code-pane ours-pane">
                     <div className="pane-tag">Ours Version</div>
-                    <pre><code>{item.our_content}</code></pre>
+                    <pre><Highlight code={item.our_content} language={selectedLanguage} /></pre>
                   </div>
                 )}
                 {item.their_content && (
                   <div className="code-pane theirs-pane">
                     <div className="pane-tag">Theirs Version</div>
-                    <pre><code>{item.their_content}</code></pre>
+                    <pre><Highlight code={item.their_content} language={selectedLanguage} /></pre>
                   </div>
                 )}
               </div>
@@ -93,8 +145,29 @@ function Conflicts() {
 
   return (
     <div className="conflicts-page">
-      <h1>Merge Conflicts</h1>
-      <p className="conflicts-subtitle">Detailed structural collisions and per-side modifications.</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <h1>Merge Conflicts</h1>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          style={{
+            padding: '7px 14px',
+            fontSize: '13px',
+            fontWeight: 500,
+            borderRadius: '8px',
+            border: '1px solid var(--card-border, #dde2ea)',
+            background: 'var(--card-bg, #ffffff)',
+            color: 'var(--text-primary, #101828)',
+            cursor: 'pointer',
+          }}
+        >
+          Refresh Analysis
+        </button>
+      </div>
+      <p className="conflicts-subtitle">
+        Detailed structural collisions and per-side modifications.
+        {' '}<span className="conflicts-shortcut-hint">Tip: press <kbd>j</kbd>/<kbd>k</kbd> to move between files.</span>
+      </p>
 
       {analyses.length === 0 ? (
         <div className="empty-conflicts-box">
@@ -134,13 +207,13 @@ function Conflicts() {
                   </div>
                   <div className="conflict-detail-actions">
                     <button onClick={() => navigate(`/treediff?file=${encodeURIComponent(selectedAnalysis.file)}`)}>
-                      <GitCompare size={15} /> View TreeDiff
+                      View TreeDiff
                     </button>
                     <button onClick={() => navigate(`/suggestions?file=${encodeURIComponent(selectedAnalysis.file)}`)}>
-                      <Sparkles size={15} /> View Suggestions
+                      View Suggestions
                     </button>
                     <button onClick={() => navigate(`/context?file=${encodeURIComponent(selectedAnalysis.file)}`)}>
-                      <FileText size={15} /> View AI Context
+                      View AI Context
                     </button>
                   </div>
                 </div>

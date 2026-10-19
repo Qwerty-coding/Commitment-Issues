@@ -10,8 +10,9 @@ import (
 )
 
 var analyzeCmd = &cobra.Command{
-	Use:   "analyze [path]",
-	Short: "Analyze conflicts, generate AST diffs and JSON reports",
+	Use:     "analyze [path]",
+	Aliases: []string{"analyse"},
+	Short:   "Analyze conflicts, generate AST diffs and JSON reports",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// All commands default uniformly to the current directory; the explicit
 		// path argument overrides it.

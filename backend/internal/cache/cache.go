@@ -535,17 +535,28 @@ func (c *ASTCache) writeDiskEntry(entry *Entry) error {
 		return fmt.Errorf("failed to marshal disk entry: %w", err)
 	}
 
-	// Atomic write via temporary file
+	// Atomic write via temporary file. On Windows os.Rename cannot replace an
+	// existing file, so the target is moved aside first and restored if the
+	// rename fails — otherwise a failed rename would permanently lose the
+	// previously cached entry (a recoverable cache miss, but still data loss).
 	tempFile := filepath.Join(c.config.DiskDir, fmt.Sprintf("%s.%d.tmp", hashKey, time.Now().UnixNano()))
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp disk cache file: %w", err)
 	}
 
-	// Safe rename on Windows and Unix
-	_ = os.Remove(targetFile)
-	if err := os.Rename(tempFile, targetFile); err != nil {
-		_ = os.Remove(tempFile)
-		return fmt.Errorf("failed to atomically commit disk cache file: %w", err)
+	if renameErr := os.Rename(tempFile, targetFile); renameErr != nil {
+		// Retry after moving the existing target aside (Windows replace).
+		backup := targetFile + ".bak"
+		if mvErr := os.Rename(targetFile, backup); mvErr != nil {
+			_ = os.Remove(tempFile)
+			return fmt.Errorf("failed to atomically commit disk cache file: %w", renameErr)
+		}
+		if retryErr := os.Rename(tempFile, targetFile); retryErr != nil {
+			_ = os.Rename(backup, targetFile) // restore the previous entry
+			_ = os.Remove(tempFile)
+			return fmt.Errorf("failed to atomically commit disk cache file: %w", retryErr)
+		}
+		_ = os.Remove(backup)
 	}
 
 	// Enforce disk size limit and evict oldest if needed

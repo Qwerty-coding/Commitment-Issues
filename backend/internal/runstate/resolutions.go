@@ -119,6 +119,11 @@ func sortResolutionByCreated(items []resolutions.Resolution) {
 // assigning the next run-wide monotonic sequence number under
 // the run lock. A zero timestamp is replaced with the current
 // UTC time so the audit order is always well-defined.
+//
+// The log is bounded: once DefaultMaxResolutionEvents entries are retained,
+// the oldest are evicted so a long-lived server (days of merges, repeated
+// branch switches) cannot grow memory without limit. The sequence counter is
+// never reset, so retained events keep globally increasing Sequence values.
 func (r *Run) RecordResolutionEvent(event resolutions.ResolutionEvent) resolutions.ResolutionEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -128,7 +133,30 @@ func (r *Run) RecordResolutionEvent(event resolutions.ResolutionEvent) resolutio
 	r.eventSeq++
 	event.Sequence = r.eventSeq
 	r.resolutionEvents = append(r.resolutionEvents, event)
+	if max := r.maxEvents(); len(r.resolutionEvents) > max {
+		drop := len(r.resolutionEvents) - max
+		trimmed := make([]resolutions.ResolutionEvent, len(r.resolutionEvents)-drop)
+		copy(trimmed, r.resolutionEvents[drop:])
+		r.resolutionEvents = trimmed
+	}
 	return event
+}
+
+// maxEvents returns the configured cap on retained audit events, falling back
+// to DefaultMaxResolutionEvents when unset.
+func (r *Run) maxEvents() int {
+	if r.resolutionEventLimit > 0 {
+		return r.resolutionEventLimit
+	}
+	return DefaultMaxResolutionEvents
+}
+
+// SetResolutionEventLimit overrides the bounded audit-log size (used by tests
+// and future configuration). Non-positive values restore the default.
+func (r *Run) SetResolutionEventLimit(limit int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolutionEventLimit = limit
 }
 
 // ResolutionEvents returns the audit events of one resolution in

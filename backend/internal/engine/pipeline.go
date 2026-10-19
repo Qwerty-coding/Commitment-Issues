@@ -21,6 +21,7 @@ import (
 	parser "CommitIssues/internal/parser"
 	prompt "CommitIssues/internal/prompt"
 	report "CommitIssues/internal/report"
+	"CommitIssues/internal/patch"
 	"CommitIssues/internal/resolutions"
 	"CommitIssues/internal/runstate"
 	semantic "CommitIssues/internal/semantic"
@@ -140,10 +141,11 @@ func FindConflicts(ctx context.Context, scanRoot string) (map[string][]string, [
 		relScan, relErr := filepath.Rel(absRepoRoot, absScanRoot)
 		if relErr == nil && relScan != "." && !strings.HasPrefix(relScan, "..") {
 			var filtered []string
-			prefix := relScan + string(filepath.Separator)
+			relScanSlash := filepath.ToSlash(relScan)
+			prefix := relScanSlash + "/"
 			for _, f := range conflictedFiles {
-				cleanF := filepath.Clean(f)
-				if cleanF == relScan || strings.HasPrefix(cleanF, prefix) {
+				cleanF := filepath.ToSlash(f)
+				if cleanF == relScanSlash || strings.HasPrefix(cleanF, prefix) {
 					filtered = append(filtered, f)
 				}
 			}
@@ -429,7 +431,7 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 	report.PrintDiffReport(&buf, smartDiff)
 
 	if runAI {
-		if err := runAIResolution(ctx, run, repoRoot, &buf, targetFile, smartDiff, promptCtx, cfg); err != nil {
+		if err := runAIResolution(ctx, run, repoRoot, filepath.Join(repoRoot, targetFile), &buf, targetFile, smartDiff, promptCtx, cfg); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return FileOutcome{File: targetFile, Output: buf.String(), Err: ctxErr}
 			}
@@ -449,7 +451,7 @@ func ProcessConflictFile(ctx context.Context, run *runstate.Run, repoRoot, targe
 // runAIResolution resolves each collision in order, honoring cancellation,
 // applying the configured health check, per-request timeout and retry policy,
 // and recording every outcome as a run-scoped suggestion.
-func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, buf *bytes.Buffer, targetFile string, smartDiff semantic.SmartDiffResult, promptCtx promptcontext.PromptContextIR, cfg Config) error {
+func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot, absFilePath string, buf *bytes.Buffer, targetFile string, smartDiff semantic.SmartDiffResult, promptCtx promptcontext.PromptContextIR, cfg Config) error {
 	debugPrintf("[analyze] file %s: starting AI resolution for %d collision(s) via %s\n", targetFile, len(smartDiff.Collisions), cfg.AI.Provider)
 	fmt.Fprintf(buf, "\nInitializing AI Provider: %s (model: %s)...\n", cfg.AI.Provider, cfg.AI.Model)
 
@@ -526,7 +528,11 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 				item.Status = runstate.StatusComplete
 				// Local deterministic verification replaces the (deprecated)
 				// AI self-reported confidence gating per docs/design_decisions.md.
-				verificationRes := verification.Evaluate(targetFile, res.SuggestedCode, region)
+				// Verification needs the FULL proposed file (not the bare snippet)
+				// so its syntax check parses real code instead of an isolated
+				// fragment; build it by splicing the replacement into the region.
+				verificationRes := verification.Evaluate(targetFile, proposedFileFor(absFilePath, region, res.SuggestedCode), region)
+				item.Verification = &verificationRes
 				if verificationRes.Status == verification.StatusNeedsReview {
 					item.Status = runstate.StatusManualReview
 				}
@@ -577,14 +583,15 @@ func runAIResolution(ctx context.Context, run *runstate.Run, repoRoot string, bu
 		// Local deterministic verification replaces the (deprecated) AI
 		// self-reported confidence per docs/design_decisions.md. The conflict
 		// region is matched from the stored analysis when one exists; an empty
-		// region short-circuits the content-size sanity checks.
+		// region short-circuits the content-size sanity checks. The full proposed
+		// file is built so the syntax check is meaningful.
 		verificationRegion := git.ConflictRegion{}
 		if run != nil {
 			if analysis, ok := run.GetAnalysis(repoRoot, targetFile); ok {
 				verificationRegion, _ = git.MatchConflictRegion(analysis.ConflictRegions, collision.Line, collision.OurContent, collision.TheirContent, collision.BaseContent)
 			}
 		}
-		verificationRes := verification.Evaluate(targetFile, res.SuggestedCode, verificationRegion)
+		verificationRes := verification.Evaluate(targetFile, proposedFileFor(absFilePath, verificationRegion, res.SuggestedCode), verificationRegion)
 		debugPrintf("[analyze] file %s: collision %d/%d resolved in %s (local verification score=%d%%)\n", targetFile, i+1, len(smartDiff.Collisions), duration, verificationRes.Score)
 		fmt.Fprintf(buf, "     ✓ Resolved (Local Verification Score: %d%%)\n", verificationRes.Score)
 		fmt.Fprintf(buf, "       Explanation: %s\n", res.Explanation)
@@ -627,6 +634,29 @@ func runID(run *runstate.Run) string {
 		return ""
 	}
 	return run.ID
+}
+
+// proposedFileFor reads the working-tree file at absFilePath, splices the
+// replacement into the given conflict region, and returns the full resulting
+// file content. It is used by deterministic verification so its syntax check
+// runs against a complete file rather than an isolated code fragment.
+//
+// When the file cannot be read, the region is empty, or the splice fails, it
+// falls back to the replacement snippet so verification still produces a
+// verdict (the caller's region-level checks remain valid either way).
+func proposedFileFor(absFilePath string, region git.ConflictRegion, replacement string) string {
+	if absFilePath == "" || region.EndLine < region.StartLine {
+		return replacement
+	}
+	original, err := os.ReadFile(absFilePath)
+	if err != nil {
+		return replacement
+	}
+	proposed, err := patch.BuildProposedContent(string(original), region, replacement)
+	if err != nil {
+		return replacement
+	}
+	return proposed
 }
 
 // readmeExcerpt retrieves the README excerpt registered for a repository by

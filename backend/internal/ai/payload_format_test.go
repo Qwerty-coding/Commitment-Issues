@@ -108,12 +108,30 @@ func TestResolveOpenAICompatible_JsonPayload(t *testing.T) {
 		t.Fatalf("expected 2 messages, got %d", len(parsed.Messages))
 	}
 
+	// The collision JSON is embedded inside explicit boundary tags so the model
+	// treats code as untrusted data (prompt-injection isolation). Extract it.
+	content := parsed.Messages[1].Content
+	start := strings.Index(content, "<structured_payload")
+	if start < 0 {
+		t.Fatalf("payload missing <structured_payload> boundary:\n%s", content)
+	}
+	start = strings.Index(content[start:], ">") + start + 1
+	end := strings.Index(content, "</structured_payload>")
+	if end < 0 || end < start {
+		t.Fatalf("payload missing closing </structured_payload> boundary:\n%s", content)
+	}
+	jsonBody := strings.TrimSpace(content[start:end])
+
 	var collision semantic.DiffItem
-	if err := json.Unmarshal([]byte(parsed.Messages[1].Content), &collision); err != nil {
-		t.Fatalf("user payload is not valid JSON: %v\n%s", err, parsed.Messages[1].Content)
+	if err := json.Unmarshal([]byte(jsonBody), &collision); err != nil {
+		t.Fatalf("user payload is not valid JSON: %v\n%s", err, jsonBody)
 	}
 	if collision.Kind != "Function" || collision.Name != "calculate" {
 		t.Errorf("unexpected collision payload: %+v", collision)
+	}
+	// Untrusted code must be enclosed in isolation tags.
+	if !strings.Contains(content, "<ours_code>") || !strings.Contains(content, "</ours_code>") {
+		t.Errorf("payload must isolate untrusted code within <ours_code> tags:\n%s", content)
 	}
 	if strings.Contains(parsed.Messages[0].Content, toonPayloadNote) {
 		t.Error("JSON payloads must not carry the TOON explainer line")

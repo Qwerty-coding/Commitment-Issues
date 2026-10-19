@@ -56,10 +56,10 @@
   justify-content: center;
   min-width: 110px;
   padding: 10px 14px;
-  background: #f8f7ff;
-  border: 1px solid #e9e6ff;
+  background: var(--brand-soft, #eff6ff);
+  border: 1px solid #bfdbfe;
   border-radius: 14px;
-  color: #4338ca;
+  color: var(--brand, #2563eb);
   font-weight: 600;
 }
 
@@ -77,8 +77,8 @@
 .collision-diff pre {
   margin: 8px 0 0;
   padding: 14px;
-  background: #1e1e2f;
-  color: #e6e6ff;
+  background: #0f172a;
+  color: #f8fafc;
   border-radius: 12px;
   white-space: pre-wrap;
 }
@@ -97,7 +97,7 @@
   padding: 22px;
   border: 1px solid #dde2ea;
   border-radius: 20px;
-  background: #f8f8ff;
+  background: #f8fafc;
 }
 
 .tree-root {
@@ -138,8 +138,8 @@
   display: inline-flex;
   padding: 6px 14px;
   border-radius: 999px;
-  background: #f1f5ff;
-  color: #4338ca;
+  background: #eff6ff;
+  color: #1d4ed8;
   font-size: 13px;
   font-weight: 700;
 }
@@ -152,21 +152,21 @@
 .tree-node-branch {
   padding: 16px;
   border-radius: 16px;
-  background: #f4f3ff;
-  border: 1px solid #e9e6ff;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
 }
 
 .tree-node-branch strong {
   display: block;
   margin-bottom: 10px;
-  color: #4338ca;
+  color: #1d4ed8;
 }
 
 .tree-node-branch pre {
   margin: 0;
   padding: 14px;
-  background: #1e1e2f;
-  color: #e6e6ff;
+  background: #0f172a;
+  color: #f8fafc;
   border-radius: 12px;
   overflow-x: auto;
   white-space: pre-wrap;

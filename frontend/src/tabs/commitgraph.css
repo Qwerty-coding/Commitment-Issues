@@ -41,7 +41,7 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 20px;
-  color: var(--brand, #6d3df5);
+  color: var(--brand, #2563eb);
 }
 
 .graph-card-header h2 {
@@ -70,7 +70,7 @@
   top: 14px;
   width: 10px;
   height: 10px;
-  background: var(--brand, #7c3aed);
+  background: var(--brand, #2563eb);
   border-radius: 50%;
 }
 
@@ -92,9 +92,9 @@
 
 .tree-label {
   padding: 12px 16px;
-  background: #fbfaff;
+  background: #f8fafc;
   border-radius: 12px;
-  border: 1px solid #e9e4f7;
+  border: 1px solid #e2e8f0;
 }
 
 .node-header-row {
@@ -180,7 +180,7 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
-  color: var(--brand, #6d3df5);
+  color: var(--brand, #2563eb);
 }
 
 .edge-list-header h2 {

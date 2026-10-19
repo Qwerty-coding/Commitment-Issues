@@ -156,6 +156,8 @@ func Build(
 				otherLines := origLines[other.StartLine-1 : other.EndLine]
 				markerBlock := strings.Join(otherLines, "\n")
 				toCheck = strings.Replace(toCheck, markerBlock, other.Ours, 1)
+				markerBlockCRLF := strings.ReplaceAll(markerBlock, "\n", "\r\n")
+				toCheck = strings.Replace(toCheck, markerBlockCRLF, other.Ours, 1)
 			}
 		}
 		if err := parser.ParseAndCheckSyntax(res.File, []byte(toCheck)); err != nil {
@@ -204,6 +206,17 @@ func findRegion(regions []git.ConflictRegion, regionID string) (git.ConflictRegi
 	}
 }
 
+// BuildProposedContent splices replacement into originalContent at the given
+// conflict region and returns the full resulting file content. It is the
+// exported entry point for callers that need the complete proposed file (e.g.
+// deterministic verification's syntax check) without building a diff.
+//
+// Returns ErrInvalidPatch when the region cannot be located or the replacement
+// cannot be safely mapped.
+func BuildProposedContent(originalContent string, region git.ConflictRegion, replacement string) (string, error) {
+	return applyRegionReplacement(originalContent, region, replacement)
+}
+
 // applyRegionReplacement replaces lines [region.StartLine, region.EndLine]
 // (1-based, inclusive) in originalContent with replacement. All other content
 // is preserved verbatim, including other conflict regions.
@@ -216,6 +229,9 @@ func findRegion(regions []git.ConflictRegion, regionID string) (git.ConflictRegi
 // Returns ErrInvalidPatch when the line range is out of bounds or the region
 // no longer contains the expected markers.
 func applyRegionReplacement(originalContent string, region git.ConflictRegion, replacement string) (string, error) {
+	// Strip accidental markdown fences (e.g. ```go\n...```) emitted by LLMs.
+	replacement = cleanMarkdownFences(replacement)
+
 	// Reject malformed replacements containing conflict markers.
 	if strings.Contains(replacement, "<<<<<<<") || strings.Contains(replacement, "=======") || strings.Contains(replacement, ">>>>>>>") {
 		return "", &PatchError{
@@ -583,4 +599,22 @@ func indexOfLine(lines []string, target string, maxIdx int) int {
 		}
 	}
 	return -1
+}
+
+// cleanMarkdownFences strips accidental markdown code block fences (e.g. ```go\n...```)
+// that LLMs often emit.
+func cleanMarkdownFences(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, "```") {
+		if newlineIdx := strings.Index(trimmed, "\n"); newlineIdx != -1 {
+			trimmed = trimmed[newlineIdx+1:]
+		} else {
+			trimmed = strings.TrimPrefix(trimmed, "```")
+		}
+		if idx := strings.LastIndex(trimmed, "```"); idx != -1 {
+			trimmed = trimmed[:idx]
+		}
+		return strings.TrimRight(trimmed, " \t\r\n")
+	}
+	return s
 }

@@ -1,25 +1,14 @@
 import "./sidebar.css"
 import { NavLink } from 'react-router-dom'
-import {
-    LayoutDashboard,
-    AlertTriangle,
-    GitCompare,
-    Sparkles,
-    Network,
-    Scale,
-    FileText,
-    History as HistoryIcon
-} from 'lucide-react'
-
 const links = [
-    { to: '/', label: 'Dashboard', Icon: LayoutDashboard, end: true },
-    { to: '/conflicts', label: 'Conflicts', Icon: AlertTriangle },
-    { to: '/treediff', label: 'TreeDiff', Icon: GitCompare },
-    { to: '/suggestions', label: 'Suggestions', Icon: Sparkles },
-    { to: '/commitgraph', label: 'AST & Dependency Graph', Icon: Network },
-    { to: '/compare', label: 'Compare', Icon: Scale },
-    { to: '/context', label: 'AI Context', Icon: FileText },
-    { to: '/history', label: 'History', Icon: HistoryIcon },
+    { to: '/', label: 'Dashboard', end: true },
+    { to: '/conflicts', label: 'Conflicts' },
+    { to: '/treediff', label: 'TreeDiff' },
+    { to: '/suggestions', label: 'Suggestions' },
+    { to: '/commitgraph', label: 'AST & Dependency Graph' },
+    { to: '/compare', label: 'Compare' },
+    { to: '/context', label: 'AI Context' },
+    { to: '/history', label: 'History' },
 ]
 
 function Sidebar({ open = false }) {
@@ -32,14 +21,13 @@ function Sidebar({ open = false }) {
 
             <nav>
                 <ul className="sidebar-nav">
-                    {links.map(({ to, label, Icon, end }) => (
+                    {links.map(({ to, label, end }) => (
                         <li key={to}>
                             <NavLink
                                 to={to}
                                 end={end}
                                 className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
                             >
-                                <Icon size={18} className="sidebar-icon" />
                                 <span>{label}</span>
                             </NavLink>
                         </li>
